@@ -371,29 +371,118 @@ function FocusTimer({ tasks, onSessionComplete }) {
   );
 }
 
-function ReadingProgressInput({ initial, onSave }) {
-  const [page, setPage] = useState(initial);
-  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
-  useEffect(() => { setPage(initial); }, [initial]);
-  function handleSave() {
-    const v = parseInt(page, 10);
-    if (isNaN(v) || v < 0) return;
-    setSaveState("saving");
-    Promise.resolve(onSave(v))
-      .then(() => { setSaveState("saved"); setTimeout(() => setSaveState("idle"), 2000); })
-      .catch(err => { console.error("Saving reading progress failed:", err); setSaveState("error"); });
+function BookIcon({ size = 14, color = COLORS.sage, open }) {
+  return open ? (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 5c-2-1.5-5-2-8-1.5v14c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-14c-3-.5-6 0-8 1.5Z" />
+      <path d="M12 5v14" />
+    </svg>
+  ) : (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" />
+    </svg>
+  );
+}
+
+// The original Currently Reading widget, exactly as designed — cover upload,
+// title, a single draggable progress bar with the book icon riding along it.
+// The library link is an additive strip above it, not a replacement: when a
+// book is linked, its cover/title feed this same widget, the bar still drags
+// exactly the same way, and dragging (on release) or typing a page number
+// both write through to the real library. Unlinked, it behaves exactly as
+// the original always did — fully local, manual, nothing missing.
+function CurrentlyReadingWidget({ book, setBook, libraryKey, saveLibraryKey, libraryLoadState, loadLibrary, libraryBooks, linkedBook, linkBook, unlinkBook, onDragCommit, pageSaveState }) {
+  const setField = patch => setBook(prev => ({ ...prev, ...patch }));
+  const progress = book.progress || 0;
+  const fileInputRef = useRef(null);
+  const [pageDraft, setPageDraft] = useState(linkedBook ? String(linkedBook.currentPage || 0) : "");
+  useEffect(() => { if (linkedBook) setPageDraft(String(linkedBook.currentPage || 0)); }, [linkedBook?.currentPage]);
+
+  function handleCoverFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setField({ cover: reader.result });
+    reader.readAsDataURL(file);
   }
+
+  function commitPageDraft() {
+    const v = parseInt(pageDraft, 10);
+    if (isNaN(v) || v < 0 || !linkedBook) return;
+    const pct = linkedBook.totalPages ? Math.round((v / linkedBook.totalPages) * 100) : progress;
+    setField({ progress: pct });
+    onDragCommit(v);
+  }
+
   return (
-    <div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <input type="number" min="0" value={page} onChange={e => setPage(e.target.value)}
-          style={{ flex: 1, padding: 8, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 13.5 }} />
-        <button onClick={handleSave} disabled={saveState === "saving"} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", cursor: saveState === "saving" ? "default" : "pointer", opacity: saveState === "saving" ? 0.6 : 1 }}>
-          {saveState === "saving" ? "Saving…" : "Save"}
-        </button>
+    <div style={{ background: "#fff", borderRadius: 14, padding: 16, border: `1px solid ${COLORS.lavenderLight}` }}>
+      <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, marginBottom: 12, fontFamily: BODY_FONT, textAlign: "center" }}>Currently Reading</h3>
+
+      {!libraryKey ? (
+        <div style={{ marginBottom: 12 }}>
+          <LibraryConnect onConnect={saveLibraryKey} />
+        </div>
+      ) : !linkedBook ? (
+        <div style={{ marginBottom: 12 }}>
+          {libraryLoadState === "loading" && <div style={{ fontSize: 12, color: COLORS.sage }}>Loading your library…</div>}
+          {libraryLoadState === "error" && (
+            <button onClick={() => loadLibrary(libraryKey)} style={{ width: "100%", padding: 7, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 12 }}>Couldn't reach your library — try again</button>
+          )}
+          {libraryLoadState === "loaded" && <LibraryPicker books={libraryBooks} onPick={linkBook} />}
+        </div>
+      ) : (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, fontSize: 11, color: COLORS.sage }}>
+          <span>Linked to your library</span>
+          <button onClick={unlinkBook} style={{ background: "none", border: "none", color: COLORS.sage, textDecoration: "underline", fontSize: 11, cursor: "pointer", padding: 0 }}>Change book</button>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+        <div onClick={() => fileInputRef.current?.click()} title="Click to add a cover image" style={{ width: 52, height: 74, borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, background: book.cover ? `url(${book.cover}) center/cover` : COLORS.cream, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+          {!book.cover && <BookIcon size={18} open={false} />}
+        </div>
+        <input ref={fileInputRef} type="file" accept="image/*" onChange={handleCoverFile} style={{ display: "none" }} />
+        <input type="text" value={book.title || ""} onChange={e => setField({ title: e.target.value })} placeholder="Book title"
+          style={{ flex: 1, alignSelf: "flex-start", padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 13.5, boxSizing: "border-box" }} />
       </div>
-      {saveState === "saved" && <div style={{ fontSize: 11.5, color: COLORS.sage, marginTop: 4 }}>Saved to your library.</div>}
-      {saveState === "error" && <div style={{ fontSize: 11.5, color: "#a0524a", marginTop: 4 }}>Couldn't save — check your connection and try again.</div>}
+
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 6, color: COLORS.sage }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <BookIcon size={11} open={progress > 0 && progress < 100} /> Your progress
+          </span>
+          <span>{progress}%</span>
+        </div>
+        <div style={{ position: "relative", height: 6, borderRadius: 999, background: COLORS.lavenderLight }}>
+          <div style={{ position: "absolute", top: 0, left: 0, height: 6, borderRadius: 999, width: progress + "%", background: COLORS.sage }} />
+          <div style={{ position: "absolute", top: "50%", left: `calc(${progress}% - 8px)`, transform: "translateY(-50%)" }}>
+            <BookIcon size={14} open={progress > 0 && progress < 100} />
+          </div>
+          <input
+            type="range" min="0" max="100" value={progress}
+            onChange={e => setField({ progress: Number(e.target.value) })}
+            onMouseUp={e => { if (linkedBook && linkedBook.totalPages) onDragCommit(Math.round((Number(e.target.value) / 100) * linkedBook.totalPages)); }}
+            onTouchEnd={e => { if (linkedBook && linkedBook.totalPages) onDragCommit(Math.round((progress / 100) * linkedBook.totalPages)); }}
+            style={{ position: "absolute", inset: 0, width: "100%", opacity: 0, cursor: "pointer" }}
+          />
+        </div>
+        {linkedBook && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+            <input type="number" min="0" value={pageDraft} onChange={e => setPageDraft(e.target.value)} onBlur={commitPageDraft} onKeyDown={e => e.key === "Enter" && commitPageDraft()}
+              style={{ width: 70, padding: "5px 7px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12 }} />
+            <span style={{ fontSize: 11.5, color: COLORS.sage }}>of {linkedBook.totalPages || "?"} pages</span>
+            {pageSaveState === "saving" && <span style={{ fontSize: 11, color: COLORS.sage }}>Saving…</span>}
+            {pageSaveState === "saved" && <span style={{ fontSize: 11, color: COLORS.sage }}>Saved</span>}
+            {pageSaveState === "error" && <span style={{ fontSize: 11, color: "#a0524a" }}>Couldn't save</span>}
+          </div>
+        )}
+      </div>
+
+      <textarea rows={2} value={book.quote || ""} onChange={e => setField({ quote: e.target.value })} placeholder="Favorite line or quote from today's reading…"
+        style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, fontStyle: "italic", marginBottom: 8, boxSizing: "border-box", fontFamily: "inherit" }} />
+      <textarea rows={2} value={book.note || ""} onChange={e => setField({ note: e.target.value })} placeholder="Reading thoughts and notes from today…"
+        style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, boxSizing: "border-box", fontFamily: "inherit" }} />
     </div>
   );
 }
@@ -962,7 +1051,7 @@ export default function RootSystem() {
 
   function linkBook(book) {
     setLinkedBookId(book.id);
-    setReadingBook(prev => ({ ...prev, title: book.title, progress: book.totalPages ? Math.round(((book.currentPage || 0) / book.totalPages) * 100) : 0 }));
+    setReadingBook(prev => ({ ...prev, title: book.title, cover: book.coverUrl || prev.cover, progress: book.totalPages ? Math.round(((book.currentPage || 0) / book.totalPages) * 100) : 0 }));
   }
 
   function unlinkBook() {
@@ -993,6 +1082,14 @@ export default function RootSystem() {
   }
 
   const linkedBook = libraryBooks.find(b => b.id === linkedBookId) || null;
+  const [pageSaveState, setPageSaveState] = useState("idle"); // idle | saving | saved | error
+
+  function commitPageToLibrary(currentPage) {
+    setPageSaveState("saving");
+    saveReadingProgressToLibrary(currentPage)
+      .then(() => { setPageSaveState("saved"); setTimeout(() => setPageSaveState("idle"), 2000); })
+      .catch(err => { console.error("Saving reading progress failed:", err); setPageSaveState("error"); });
+  }
 
   useEffect(() => {
     const todayKey = toKey(new Date());
@@ -1873,53 +1970,21 @@ export default function RootSystem() {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }} className="today-grid">
-              <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}` }}>
-                <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, marginBottom: 12, fontFamily: BODY_FONT, textAlign: "center" }}>Currently Reading</h3>
-                <div>
-                  {!libraryKey ? (
-                    <div>
-                      <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 1, color: COLORS.sage, marginBottom: 8 }}>Link to your library</div>
-                      <LibraryConnect onConnect={connectLibrary} />
-                    </div>
-                  ) : !linkedBook ? (
-                    <div>
-                      <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 1, color: COLORS.sage, marginBottom: 8 }}>Link from your library</div>
-                      {libraryLoadState === "loading" && <div style={{ fontSize: 13, opacity: 0.7 }}>Loading your library…</div>}
-                      {libraryLoadState === "error" && (
-                        <div>
-                          <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 8 }}>Couldn't reach your library.</div>
-                          <button onClick={() => loadLibrary(libraryKey)} style={{ width: "100%", padding: 8, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: COLORS.white }}>Try again</button>
-                        </div>
-                      )}
-                      {libraryLoadState === "loaded" && <LibraryPicker books={libraryBooks} onPick={linkBook} />}
-                    </div>
-                  ) : (
-                    <div>
-                      <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 1, color: COLORS.sage, marginBottom: 8 }}>Linked to your library</div>
-                      <div style={{ fontSize: 14, fontWeight: 600 }}>{linkedBook.title}</div>
-                      <div style={{ fontSize: 12.5, opacity: 0.7, marginBottom: 10 }}>
-                        {linkedBook.totalPages ? `${linkedBook.currentPage || 0} of ${linkedBook.totalPages} pages` : "No page count set for this book"}
-                      </div>
-                      <ReadingProgressInput initial={linkedBook.currentPage || 0} onSave={saveReadingProgressToLibrary} />
-                      <button onClick={unlinkBook} style={{ width: "100%", marginTop: 8, padding: 8, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: COLORS.white, fontSize: 12.5 }}>Change book</button>
-                      <textarea
-                        value={readingBook.quote}
-                        onChange={e => setReadingBook(prev => ({ ...prev, quote: e.target.value }))}
-                        placeholder="Favorite line or quote from today's reading…"
-                        rows={2}
-                        style={{ width: "100%", marginTop: 10, padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 13, fontFamily: BODY_FONT, boxSizing: "border-box" }}
-                      />
-                      <textarea
-                        value={readingBook.note}
-                        onChange={e => setReadingBook(prev => ({ ...prev, note: e.target.value }))}
-                        placeholder="Reading thoughts and notes from today…"
-                        rows={2}
-                        style={{ width: "100%", marginTop: 8, padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 13, fontFamily: BODY_FONT, boxSizing: "border-box" }}
-                      />
-                    </div>
-                  )}
-                </div>
-
+              <div>
+                <CurrentlyReadingWidget
+                  book={readingBook}
+                  setBook={setReadingBook}
+                  libraryKey={libraryKey}
+                  saveLibraryKey={connectLibrary}
+                  libraryLoadState={libraryLoadState}
+                  loadLibrary={loadLibrary}
+                  libraryBooks={libraryBooks}
+                  linkedBook={linkedBook}
+                  linkBook={linkBook}
+                  unlinkBook={unlinkBook}
+                  onDragCommit={commitPageToLibrary}
+                  pageSaveState={pageSaveState}
+                />
               </div>
               <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}` }}>
                 <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, marginBottom: 16, fontFamily: BODY_FONT, textAlign: "center" }}>Fill Your Cup</h3>
@@ -1941,6 +2006,13 @@ export default function RootSystem() {
                   <span style={{ fontSize: 11, color: COLORS.sage }}>{cupFilled.length}/{CUP_CATEGORIES.length}</span>
                 </div>
               </div>
+            </div>
+
+            <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginTop: 20 }}>
+              <EveningCloseOut
+                closeout={closeoutLog.find(e => e.weekStart === toKey(new Date())) || {}}
+                setCloseout={c => upsertLog(setCloseoutLog, toKey(new Date()), c)}
+              />
             </div>
           </div>
         )}
@@ -2854,12 +2926,6 @@ export default function RootSystem() {
                     </div>
                   ));
                 })()}
-              </div>
-              <div style={{ background: COLORS.white, borderRadius: 16, padding: 24 }}>
-                <EveningCloseOut
-                  closeout={closeoutLog.find(e => e.weekStart === toKey(new Date())) || {}}
-                  setCloseout={c => upsertLog(setCloseoutLog, toKey(new Date()), c)}
-                />
               </div>
             </div>
             <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, gridColumn: "1 / -1" }}>
