@@ -13,7 +13,7 @@ export default async (req: Request, context: Context) => {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  const store = getStore("tulsi-grace-system");
+  const store = getStore("root-restore-system");
 
   if (req.method === "GET") {
     const data = await store.get(KEY, { type: "text" });
