@@ -373,12 +373,27 @@ function FocusTimer({ tasks, onSessionComplete }) {
 
 function ReadingProgressInput({ initial, onSave }) {
   const [page, setPage] = useState(initial);
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
   useEffect(() => { setPage(initial); }, [initial]);
+  function handleSave() {
+    const v = parseInt(page, 10);
+    if (isNaN(v) || v < 0) return;
+    setSaveState("saving");
+    Promise.resolve(onSave(v))
+      .then(() => { setSaveState("saved"); setTimeout(() => setSaveState("idle"), 2000); })
+      .catch(err => { console.error("Saving reading progress failed:", err); setSaveState("error"); });
+  }
   return (
-    <div style={{ display: "flex", gap: 8 }}>
-      <input type="number" min="0" value={page} onChange={e => setPage(e.target.value)}
-        style={{ flex: 1, padding: 8, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 13.5 }} />
-      <button onClick={() => { const v = parseInt(page, 10); if (!isNaN(v) && v >= 0) onSave(v); }} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", cursor: "pointer" }}>Save</button>
+    <div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input type="number" min="0" value={page} onChange={e => setPage(e.target.value)}
+          style={{ flex: 1, padding: 8, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 13.5 }} />
+        <button onClick={handleSave} disabled={saveState === "saving"} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", cursor: saveState === "saving" ? "default" : "pointer", opacity: saveState === "saving" ? 0.6 : 1 }}>
+          {saveState === "saving" ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {saveState === "saved" && <div style={{ fontSize: 11.5, color: COLORS.sage, marginTop: 4 }}>Saved to your library.</div>}
+      {saveState === "error" && <div style={{ fontSize: 11.5, color: "#a0524a", marginTop: 4 }}>Couldn't save — check your connection and try again.</div>}
     </div>
   );
 }
@@ -956,8 +971,8 @@ export default function RootSystem() {
 
   function saveReadingProgressToLibrary(currentPage) {
     const key = libraryKey;
-    if (!key || !linkedBookId) return;
-    fetch(LIBRARY_URL + "?key=" + encodeURIComponent(key))
+    if (!key || !linkedBookId) return Promise.reject(new Error("No library connected or no book linked"));
+    return fetch(LIBRARY_URL + "?key=" + encodeURIComponent(key))
       .then(r => r.ok ? r.json() : Promise.reject(new Error("Library load failed")))
       .then(res => {
         const data = res.data;
@@ -974,8 +989,7 @@ export default function RootSystem() {
       .then(totalPages => {
         setReadingBook(prev => ({ ...prev, progress: totalPages ? Math.round((currentPage / totalPages) * 100) : prev.progress }));
         loadLibrary(key);
-      })
-      .catch(err => { console.error("Saving reading progress failed:", err); alert("Couldn't save your progress — please try again."); });
+      });
   }
 
   const linkedBook = libraryBooks.find(b => b.id === linkedBookId) || null;
@@ -1587,7 +1601,7 @@ export default function RootSystem() {
   function exportDataJSON() {
     const payload = {
       exportedAt: new Date().toISOString(),
-      app: "root-restore-system",
+      app: "tulsi-grace-system",
       inboxItems, tasks, categories, events, savedQuotes, quote, author, weekStart,
       cycleStart, cycleLength, periodLength, includeHolidays, themeBg, themeAccent, themeHighlight,
       routines, showRoutinesOnMonth, showRoutinesOnWeek,
@@ -1701,16 +1715,6 @@ export default function RootSystem() {
 
         {isLoaded && (
         <>
-        {/* Betterment Theme banner — links out to the standalone Betterment Theme app */}
-        <a href="/betterment-theme.html" className="no-print" style={{
-          display: "block", textDecoration: "none", marginBottom: 16, padding: "12px 18px",
-          borderRadius: 11, border: `1px solid ${COLORS.lavenderLight}`, background: COLORS.lavenderLight,
-          color: COLORS.ink, fontFamily: BODY_FONT,
-        }}>
-          <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", opacity: 0.6 }}>Betterment Theme</span>
-          <div style={{ fontFamily: DISPLAY_FONT, fontSize: 16, marginTop: 2 }}>Open this month's theme →</div>
-        </a>
-
         {/* Tabs */}
         <div className="no-print" style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
           {[
@@ -1730,8 +1734,7 @@ export default function RootSystem() {
 
         {/* ---------------- INBOX TAB ---------------- */}
         {tab === "today" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }} className="today-grid">
-            <div>
+          <div>
               {(() => {
                 void clockTick; // reference intentionally — recomputes this block every minute
                 const now = new Date();
@@ -1769,7 +1772,7 @@ export default function RootSystem() {
                 );
               })()}
 
-              <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginBottom: 20 }}>
+            <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginBottom: 20 }}>
                 <div style={{ fontSize: 12, letterSpacing: 1, textAlign: "center", color: COLORS.sage, textTransform: "uppercase", marginBottom: 4 }}>
                   {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
                 </div>
@@ -1798,9 +1801,13 @@ export default function RootSystem() {
                     )}
                   </div>
                 )}
-                <BettermentThemeCard />
-              </div>
-              <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginBottom: 20 }}>
+            </div>
+
+            <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}`, marginBottom: 20 }}>
+              <BettermentThemeCard />
+            </div>
+
+            <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginBottom: 20 }}>
                 <div style={{ fontFamily: DISPLAY_FONT, fontSize: 18, textAlign: "center", margin: "0 0 4px" }}>Daily 3</div>
                 <div style={{ fontSize: 12, color: COLORS.sage, marginBottom: 12, textAlign: "center" }}>Your three non-negotiables today</div>
                 {[0, 1, 2].map(slot => {
@@ -1838,7 +1845,7 @@ export default function RootSystem() {
                 })}
               </div>
 
-              <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginBottom: 20 }}>
+            <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginBottom: 20 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, textAlign: "center", marginBottom: 12 }}>Today's Tasks</div>
                 <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
                   <input value={quickTaskDraft} onChange={e => setQuickTaskDraft(e.target.value)} onKeyDown={e => e.key === "Enter" && commitQuickTask()} placeholder="Quick-add a task for today…" style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 13.5, boxSizing: "border-box" }} />
@@ -1856,10 +1863,16 @@ export default function RootSystem() {
                 {tasksByStatus[STATUS.ACTIVE].filter(t => t.scheduledDate === toKey(new Date())).length === 0 && <div style={{ fontSize: 13, color: COLORS.ink, opacity: 0.6, textAlign: "center" }}>Nothing scheduled for today yet — quick-add one above, or schedule an Active task for today from Task Lists or the Calendar.</div>}
               </div>
 
-              <div style={{ marginBottom: 20 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }} className="today-grid">
+              <div>
                 <FocusTimer tasks={tasksByStatus[STATUS.ACTIVE]} onSessionComplete={t => { if (t) updateTask(t.id, { status: STATUS.COMPLETED }); }} />
               </div>
+              <div>
+                <MoonAndCycleWidget cyclePhase={cycleStart ? cyclePhaseForDate(new Date(), cycleStart, cycleLength, periodLength)?.phase : null} />
+              </div>
+            </div>
 
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }} className="today-grid">
               <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}` }}>
                 <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, marginBottom: 12, fontFamily: BODY_FONT, textAlign: "center" }}>Currently Reading</h3>
                 <div>
@@ -1908,13 +1921,6 @@ export default function RootSystem() {
                 </div>
 
               </div>
-            </div>
-
-            <div>
-              <div style={{ marginBottom: 20 }}>
-                <MoonAndCycleWidget cyclePhase={cycleStart ? cyclePhaseForDate(new Date(), cycleStart, cycleLength, periodLength)?.phase : null} />
-              </div>
-
               <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}` }}>
                 <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, marginBottom: 16, fontFamily: BODY_FONT, textAlign: "center" }}>Fill Your Cup</h3>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 16 }}>
@@ -1938,7 +1944,6 @@ export default function RootSystem() {
             </div>
           </div>
         )}
-
         {tab === "inbox" && (
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: 16 }}>
             <div style={cardStyle}>
