@@ -434,6 +434,89 @@ function pickTaskForMe(tasks, mode) {
   return pool[pool.length - 1];
 }
 
+function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addRecurringTask }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [draft, setDraft] = useState({ text: "", category: categories[0]?.id || "", mode: "", recurrenceType: "weekly", everyNDays: 3 });
+
+  const recurringTasks = tasks.filter(t => t.recurrence && (t.status === STATUS.ACTIVE || t.status === STATUS.SOMEDAY));
+
+  function commitAdd() {
+    if (!draft.text.trim()) return;
+    addRecurringTask({
+      text: draft.text.trim(), category: draft.category || null, mode: draft.mode || null,
+      recurrence: { type: draft.recurrenceType, everyNDays: draft.recurrenceType === "custom" ? Math.max(1, Number(draft.everyNDays) || 1) : undefined },
+    });
+    setDraft({ text: "", category: categories[0]?.id || "", mode: "", recurrenceType: "weekly", everyNDays: 3 });
+    setShowAdd(false);
+  }
+
+  return (
+    <div style={{ ...cardStyle, marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <button onClick={() => setCollapsed(c => !c)} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: DISPLAY_FONT, fontSize: 18, color: COLORS.ink }}>
+          <span style={{ display: "inline-block", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s", fontSize: 14 }}>▾</span>
+          Recurring Tasks {recurringTasks.length > 0 && `(${recurringTasks.length})`}
+        </button>
+        {!collapsed && <button onClick={() => setShowAdd(s => !s)} style={{ fontSize: 12.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer" }}>{showAdd ? "Cancel" : "+ New recurring task"}</button>}
+      </div>
+
+      {!collapsed && (
+        <div style={{ marginTop: 14 }}>
+          {showAdd && (
+            <div style={{ background: COLORS.cream, borderRadius: 10, padding: 12, marginBottom: 14 }}>
+              <input value={draft.text} onChange={e => setDraft({ ...draft, text: e.target.value })} placeholder="What needs to repeat?" style={{ ...inputStyle, marginBottom: 8, width: "100%", boxSizing: "border-box" }} />
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                <select style={inputStyle} value={draft.category} onChange={e => setDraft({ ...draft, category: e.target.value })}>
+                  {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                </select>
+                <select style={inputStyle} value={draft.mode} onChange={e => setDraft({ ...draft, mode: e.target.value })}>
+                  <option value="">No cognitive mode</option>
+                  {COGNITIVE_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+                <select style={inputStyle} value={draft.recurrenceType} onChange={e => setDraft({ ...draft, recurrenceType: e.target.value })}>
+                  {RECURRENCE_OPTIONS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                </select>
+                {draft.recurrenceType === "custom" && (
+                  <input type="number" min="1" style={{ ...inputStyle, width: 70 }} value={draft.everyNDays} onChange={e => setDraft({ ...draft, everyNDays: e.target.value })} />
+                )}
+              </div>
+              <button onClick={commitAdd} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", fontSize: 13, cursor: "pointer" }}>Add recurring task</button>
+            </div>
+          )}
+
+          {recurringTasks.length === 0 ? (
+            <div style={{ fontSize: 13, color: COLORS.sage, textAlign: "center", padding: 10 }}>No recurring tasks yet.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {recurringTasks.map(t => {
+                const cat = t.category ? categories.find(c => c.id === t.category) : null;
+                const rec = RECURRENCE_OPTIONS.find(r => r.id === t.recurrence.type);
+                const modeInfo = t.mode ? COGNITIVE_MODES.find(m => m.id === t.mode) : null;
+                return (
+                  <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: COLORS.cream, borderRadius: 8, flexWrap: "wrap", gap: 8 }}>
+                    <div>
+                      <span style={{ fontSize: 13.5 }}>{t.text}</span>
+                      <span style={{ fontSize: 11.5, color: COLORS.sage, marginLeft: 8 }}>
+                        ↻ {t.recurrence.type === "custom" ? `every ${t.recurrence.everyNDays || 1} days` : rec?.label.toLowerCase()}
+                        {cat && ` · ${cat.label}`}{modeInfo && ` · ${modeInfo.label}`}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => updateTask(t.id, { recurrence: null })} style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Stop repeating</button>
+                      <button onClick={() => { if (window.confirm(`Delete "${t.text}" entirely? This removes the task itself, not just its recurrence.`)) deleteTask(t.id); }} style={{ fontSize: 11.5, color: "#a0524a", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Delete</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DecideForMe({ tasks, updateTask }) {
   const [minutes, setMinutes] = useState(20);
   const [mode, setMode] = useState("");
@@ -1084,6 +1167,7 @@ export default function RootSystem() {
   const [taskFilterStatus, setTaskFilterStatus] = useState("all"); // all | pending | active | someday | completed | archived
   const [taskFilterCategory, setTaskFilterCategory] = useState("all");
   const [taskFilterMode, setTaskFilterMode] = useState("all");
+  const [collapsedSections, setCollapsedSections] = useState({ completed: true, archived: true });
 
   /* ---------- Daily 3 (Today tab) ---------- */
   const [dailyThreeIds, setDailyThreeIds] = useState([null, null, null]);
@@ -1111,6 +1195,9 @@ export default function RootSystem() {
     if (!text) return;
     setTasks(ts => [{ id: uid(), text, category: quickTaskCategory || null, status: STATUS.ACTIVE, estMinutes: null, scheduledDate: toKey(new Date()), mode: CATEGORY_MODE_DEFAULTS[quickTaskCategory] || null }, ...ts]);
     setQuickTaskDraft("");
+  }
+  function addRecurringTask({ text, category, mode, recurrence }) {
+    setTasks(ts => [{ id: uid(), text, category, status: STATUS.ACTIVE, estMinutes: null, scheduledDate: toKey(new Date()), mode, recurrence }, ...ts]);
   }
 
 
@@ -1584,6 +1671,9 @@ export default function RootSystem() {
         estMinutes: spawnedFrom.estMinutes, scheduledDate: nextDate, mode: spawnedFrom.mode, recurrence: spawnedFrom.recurrence,
       }, ...prev]);
     }
+  }
+  function deleteTask(id) {
+    setTasks(prev => prev.filter(t => t.id !== id));
   }
   function scheduleTask(id, date) {
     updateTask(id, { scheduledDate: date });
@@ -2294,6 +2384,8 @@ export default function RootSystem() {
               </div>
             </div>
 
+            <RecurringTasksManager tasks={tasks} categories={categories} updateTask={updateTask} deleteTask={deleteTask} addRecurringTask={addRecurringTask} />
+
             {(() => {
               const statusesToShow =
                 taskFilterStatus === "all" ? [STATUS.ACTIVE, STATUS.SOMEDAY, STATUS.COMPLETED, STATUS.ARCHIVED]
@@ -2320,12 +2412,24 @@ export default function RootSystem() {
               const labelMap = { active: "Active", someday: "Someday / Maybe", completed: "Completed", archived: "Archived" };
               const list = tasksByStatus[statusKey].filter(t => (taskFilterCategory === "all" || t.category === taskFilterCategory) && (taskFilterMode === "all" || t.mode === taskFilterMode));
               if (list.length === 0) return null;
+              const isCollapsed = collapsedSections[statusKey];
               return (
                 <div key={statusKey} style={{ marginBottom: 26 }}>
-                  <div style={{ fontFamily: DISPLAY_FONT, fontSize: 18, color: COLORS.ink, marginBottom: 10 }}>
-                    {labelMap[statusKey]} {list.length > 0 && `(${list.length})`}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <button onClick={() => setCollapsedSections(prev => ({ ...prev, [statusKey]: !prev[statusKey] }))}
+                      style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: DISPLAY_FONT, fontSize: 18, color: COLORS.ink }}>
+                      <span style={{ display: "inline-block", transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s", fontSize: 14 }}>▾</span>
+                      {labelMap[statusKey]} {list.length > 0 && `(${list.length})`}
+                    </button>
+                    {statusKey === STATUS.ARCHIVED && (
+                      <button onClick={() => { if (window.confirm(`Permanently delete all ${list.length} archived task${list.length === 1 ? "" : "s"}? This can't be undone.`)) setTasks(prev => prev.filter(t => t.status !== STATUS.ARCHIVED)); }}
+                        style={{ fontSize: 12, color: "#a0524a", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+                        Clear all archived
+                      </button>
+                    )}
                   </div>
 
+                  {!isCollapsed && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     {list.map(t => {
                       const cat = t.category ? categoryById(t.category) : null;
@@ -2417,12 +2521,16 @@ export default function RootSystem() {
                               {statusKey !== STATUS.SOMEDAY && <Pill color={COLORS.lavender} onClick={() => updateTask(t.id, { status: STATUS.SOMEDAY })}>Someday</Pill>}
                               {statusKey !== STATUS.ARCHIVED && <Pill color={COLORS.ink} onClick={() => updateTask(t.id, { status: STATUS.ARCHIVED })}>Archive</Pill>}
                               {statusKey !== STATUS.ACTIVE && <Pill color={COLORS.sage} onClick={() => updateTask(t.id, { status: STATUS.ACTIVE })}>Reactivate</Pill>}
+                              {statusKey === STATUS.ARCHIVED && (
+                                <Pill color="#a0524a" onClick={() => { if (window.confirm(`Permanently delete "${t.text}"? This can't be undone.`)) deleteTask(t.id); }}>Delete</Pill>
+                              )}
                             </div>
                           </div>
                         </div>
                       );
                     })}
                   </div>
+                  )}
                 </div>
               );
             })}
