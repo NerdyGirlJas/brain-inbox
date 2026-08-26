@@ -39,6 +39,27 @@ const DEFAULT_CATEGORIES = [
 // A rotating palette for new custom categories so each one gets a distinct color automatically
 const NEW_CATEGORY_COLORS = ["#c98a3e", "#4f7a6b", "#9c5b8f", "#6b7fae", "#b3562f", "#5c8a3e"];
 
+const RECURRENCE_OPTIONS = [
+  { id: "daily", label: "Daily" },
+  { id: "weekly", label: "Weekly" },
+  { id: "monthly", label: "Monthly" },
+  { id: "annually", label: "Annually" },
+  { id: "custom", label: "Custom (every N days)" },
+];
+
+function nextRecurrenceDate(fromDateKey, recurrence) {
+  if (!recurrence || !fromDateKey) return null;
+  const [y, m, d] = fromDateKey.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  if (recurrence.type === "daily") date.setDate(date.getDate() + 1);
+  else if (recurrence.type === "weekly") date.setDate(date.getDate() + 7);
+  else if (recurrence.type === "monthly") date.setMonth(date.getMonth() + 1);
+  else if (recurrence.type === "annually") date.setFullYear(date.getFullYear() + 1);
+  else if (recurrence.type === "custom") date.setDate(date.getDate() + (recurrence.everyNDays || 1));
+  else return null;
+  return toKey(date);
+}
+
 const COGNITIVE_MODES = [
   { id: "generative", label: "Generative", color: "#c4986a" },
   { id: "analytical", label: "Analytical / Planning", color: COLORS.azure },
@@ -392,6 +413,91 @@ function BookIcon({ size = 14, color = COLORS.sage, open }) {
 // exactly the same way, and dragging (on release) or typing a page number
 // both write through to the real library. Unlinked, it behaves exactly as
 // the original always did — fully local, manual, nothing missing.
+// Weighted toward tasks that have been sitting longest and anything overdue,
+// so the pick isn't pure noise — it nudges toward what actually needs doing
+// while still taking the decision itself off your hands.
+function pickTaskForMe(tasks, mode) {
+  const todayKey = toKey(new Date());
+  const pool = tasks.filter(t => t.status === STATUS.ACTIVE && (!mode || t.mode === mode));
+  if (pool.length === 0) return null;
+  const weights = pool.map((t, i) => {
+    let w = 1 + i * 0.15; // later in the array = added earlier = weighted up
+    if (t.scheduledDate && t.scheduledDate < todayKey) w += 5; // overdue gets a real push
+    return w;
+  });
+  const total = weights.reduce((a, b) => a + b, 0);
+  let roll = Math.random() * total;
+  for (let i = 0; i < pool.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return pool[i];
+  }
+  return pool[pool.length - 1];
+}
+
+function DecideForMe({ tasks, updateTask }) {
+  const [minutes, setMinutes] = useState(20);
+  const [mode, setMode] = useState("");
+  const [picked, setPicked] = useState(null);
+  const [remaining, setRemaining] = useState(null);
+  const [noneFound, setNoneFound] = useState(false);
+  const intervalRef = useRef(null);
+
+  function draw() {
+    const result = pickTaskForMe(tasks, mode || null);
+    setPicked(result);
+    setNoneFound(!result);
+    setRemaining(null);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+  }
+  function startTimer() {
+    setRemaining(minutes * 60);
+    intervalRef.current = setInterval(() => {
+      setRemaining(s => { if (s <= 1) { clearInterval(intervalRef.current); return 0; } return s - 1; });
+    }, 1000);
+  }
+  useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
+
+  const mm = remaining !== null ? String(Math.floor(remaining / 60)).padStart(2, "0") : null;
+  const ss = remaining !== null ? String(remaining % 60).padStart(2, "0") : null;
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}` }}>
+      <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, marginBottom: 4, fontFamily: BODY_FONT, textAlign: "center" }}>Decide For Me</h3>
+      <div style={{ fontSize: 12, color: COLORS.sage, marginBottom: 14, textAlign: "center" }}>Too many choices? Let the app pick one.</div>
+
+      {!picked ? (
+        <>
+          <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 10 }}>
+            {[10, 20, 25, 45].map(m => (
+              <button key={m} onClick={() => setMinutes(m)} style={{ border: `1px solid ${minutes === m ? COLORS.sage : COLORS.lavenderLight}`, background: minutes === m ? COLORS.sage : "transparent", color: minutes === m ? "#fff" : COLORS.ink, borderRadius: 999, padding: "4px 11px", fontSize: 12, cursor: "pointer" }}>{m}m</button>
+            ))}
+          </div>
+          <select value={mode} onChange={e => setMode(e.target.value)} style={{ width: "100%", padding: 8, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, marginBottom: 10, fontSize: 13 }}>
+            <option value="">Any cognitive mode</option>
+            {COGNITIVE_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+          <button onClick={draw} style={{ width: "100%", padding: 10, borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 600, cursor: "pointer" }}>Pick a task for me</button>
+          {noneFound && <div style={{ fontSize: 12, color: COLORS.sage, textAlign: "center", marginTop: 8 }}>No active tasks match{mode ? " that mode" : ""} right now.</div>}
+        </>
+      ) : (
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontFamily: DISPLAY_FONT, fontSize: 17, marginBottom: 4 }}>{picked.text}</div>
+          {picked.mode && <div style={{ fontSize: 11.5, color: COLORS.sage, marginBottom: 10 }}>{COGNITIVE_MODES.find(m => m.id === picked.mode)?.label}</div>}
+          {remaining !== null ? (
+            <div style={{ fontFamily: "'Playfair Display', Georgia, serif", fontSize: 26, margin: "8px 0 14px" }}>{mm}:{ss}</div>
+          ) : (
+            <button onClick={startTimer} style={{ width: "100%", padding: 9, borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 600, cursor: "pointer", marginBottom: 8 }}>Start {minutes}m timer</button>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => { updateTask(picked.id, { status: STATUS.COMPLETED }); setPicked(null); setRemaining(null); }} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", fontSize: 12.5, cursor: "pointer" }}>Done</button>
+            <button onClick={draw} style={{ flex: 1, padding: 8, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 12.5, cursor: "pointer" }}>Pick another</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CurrentlyReadingWidget({ book, setBook, libraryKey, saveLibraryKey, libraryLoadState, loadLibrary, libraryBooks, linkedBook, linkBook, unlinkBook, onDragCommit, pageSaveState }) {
   const setField = patch => setBook(prev => ({ ...prev, ...patch }));
   const progress = book.progress || 0;
@@ -769,6 +875,15 @@ function minutesToTop(mins) {
   const clamped = Math.max(0, Math.min(mins, (GRID_HOUR_END - GRID_HOUR_START) * 60));
   return (clamped / 60) * GRID_PX_PER_HOUR;
 }
+function pixelYToTime(y) {
+  const rawMinutes = (y / GRID_PX_PER_HOUR) * 60;
+  const snapped = Math.round(rawMinutes / 15) * 15;
+  const clamped = Math.max(0, Math.min(snapped, (GRID_HOUR_END - GRID_HOUR_START) * 60));
+  const totalMin = GRID_HOUR_START * 60 + clamped;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
 function formatHourLabel(h) {
   const period = h < 12 || h === 24 ? "AM" : "PM";
   let hour12 = h % 12;
@@ -776,7 +891,9 @@ function formatHourLabel(h) {
   return `${hour12} ${period}`;
 }
 
-function HourGridColumn({ routines, items, categoryById, compact }) {
+function HourGridColumn({ routines, items, categoryById, compact, onRescheduleTask }) {
+  const [dragOverY, setDragOverY] = useState(null);
+  const gridRef = useRef(null);
   const timedRoutines = routines.filter(r => r.startTime);
   const allDayRoutines = routines.filter(r => !r.startTime);
   const timedItems = items.filter(it => it.time);
@@ -796,11 +913,31 @@ function HourGridColumn({ routines, items, categoryById, compact }) {
           })}
         </div>
       )}
-      <div style={{
+      <div ref={gridRef} style={{
         position: "relative", height: GRID_HEIGHT,
         background: `repeating-linear-gradient(to bottom, ${COLORS.lavenderLight} 0, ${COLORS.lavenderLight} 1px, transparent 1px, transparent ${GRID_PX_PER_HOUR}px)`,
         borderTop: `1px solid ${COLORS.lavenderLight}`, borderBottom: `1px solid ${COLORS.lavenderLight}`,
-      }}>
+      }}
+        onDragOver={e => {
+          if (!onRescheduleTask) return;
+          e.preventDefault();
+          const rect = gridRef.current.getBoundingClientRect();
+          setDragOverY(e.clientY - rect.top);
+        }}
+        onDragLeave={() => setDragOverY(null)}
+        onDrop={e => {
+          if (!onRescheduleTask) return;
+          e.preventDefault();
+          const taskId = e.dataTransfer.getData("text/task-id");
+          setDragOverY(null);
+          if (!taskId) return;
+          const rect = gridRef.current.getBoundingClientRect();
+          onRescheduleTask(taskId, pixelYToTime(e.clientY - rect.top));
+        }}
+      >
+        {dragOverY !== null && (
+          <div style={{ position: "absolute", top: dragOverY, left: 0, right: 0, height: 2, background: COLORS.sage, zIndex: 5, pointerEvents: "none" }} />
+        )}
         {/* Routine envelopes: the named block spans its own start–end, sub-items render inside it */}
         {timedRoutines.map(r => {
           const startMin = timeToGridMinutes(r.startTime);
@@ -843,12 +980,16 @@ function HourGridColumn({ routines, items, categoryById, compact }) {
           const cat = it.category ? categoryById(it.category) : null;
           const color = cat ? cat.color : COLORS.azure;
           return (
-            <div key={ii} title={it.label} style={{
-              position: "absolute", top, height, left: "40%", right: 1,
-              background: `${color}30`, borderLeft: `2.5px solid ${color}`,
-              borderRadius: 3, padding: "1px 4px", overflow: "hidden",
-              fontSize: compact ? 7.5 : 10.5, color: COLORS.ink, fontWeight: 600, lineHeight: 1.2,
-            }}>
+            <div key={ii} title={it.label}
+              draggable={!!it.taskId}
+              onDragStart={e => { if (it.taskId) e.dataTransfer.setData("text/task-id", it.taskId); }}
+              style={{
+                position: "absolute", top, height, left: "40%", right: 1,
+                background: `${color}30`, borderLeft: `2.5px solid ${color}`,
+                borderRadius: 3, padding: "1px 4px", overflow: "hidden",
+                fontSize: compact ? 7.5 : 10.5, color: COLORS.ink, fontWeight: 600, lineHeight: 1.2,
+                cursor: it.taskId ? "grab" : "default",
+              }}>
               {it.time} {it.label}
             </div>
           );
@@ -1423,14 +1564,26 @@ export default function RootSystem() {
 
   /* ---------- task actions ---------- */
   function updateTask(id, patch) {
+    let spawnedFrom = null;
     setTasks(tasks.map(t => {
       if (t.id !== id) return t;
       const next = { ...t, ...patch };
       if (patch.status === STATUS.COMPLETED && t.status !== STATUS.COMPLETED) {
         next.completedDate = toKey(new Date());
+        // Only spawn the next occurrence once per instance — otherwise
+        // checking a recurring task off, unchecking it, and checking it
+        // again would spawn a duplicate "next occurrence" every time.
+        if (t.recurrence && !t.spawnedNext) { spawnedFrom = t; next.spawnedNext = true; }
       }
       return next;
     }));
+    if (spawnedFrom) {
+      const nextDate = nextRecurrenceDate(spawnedFrom.scheduledDate || toKey(new Date()), spawnedFrom.recurrence);
+      setTasks(prev => [{
+        id: uid(), text: spawnedFrom.text, category: spawnedFrom.category, status: STATUS.ACTIVE,
+        estMinutes: spawnedFrom.estMinutes, scheduledDate: nextDate, mode: spawnedFrom.mode, recurrence: spawnedFrom.recurrence,
+      }, ...prev]);
+    }
   }
   function scheduleTask(id, date) {
     updateTask(id, { scheduledDate: date });
@@ -1969,6 +2122,10 @@ export default function RootSystem() {
               </div>
             </div>
 
+            <div style={{ marginBottom: 20 }}>
+              <DecideForMe tasks={tasksByStatus[STATUS.ACTIVE]} updateTask={updateTask} />
+            </div>
+
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }} className="today-grid">
               <div>
                 <CurrentlyReadingWidget
@@ -2198,6 +2355,7 @@ export default function RootSystem() {
                               {isOverdue && <Pill color="#c4786a" active>Overdue</Pill>}
                               {cat && <Pill color={cat.color} active>{cat.label}</Pill>}
                               {t.mode && (() => { const m = COGNITIVE_MODES.find(x => x.id === t.mode); return m ? <Pill color={m.color} active>{m.label}</Pill> : null; })()}
+                              {t.recurrence && <Pill color={COLORS.lavender} active>↻ {RECURRENCE_OPTIONS.find(r => r.id === t.recurrence.type)?.label || "Repeats"}</Pill>}
                             </div>
                           </div>
                           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
@@ -2220,6 +2378,22 @@ export default function RootSystem() {
                                 <option value="">—</option>
                                 {COGNITIVE_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                               </select>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ fontSize: 11, color: COLORS.sage, fontWeight: 600 }}>REPEATS</span>
+                              <select
+                                style={{ ...inputStyle, padding: "6px 8px", fontSize: 12.5 }}
+                                value={t.recurrence?.type || ""}
+                                onChange={e => updateTask(t.id, { recurrence: e.target.value ? { type: e.target.value, everyNDays: t.recurrence?.everyNDays || 3 } : null })}
+                              >
+                                <option value="">Never</option>
+                                {RECURRENCE_OPTIONS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                              </select>
+                              {t.recurrence?.type === "custom" && (
+                                <input type="number" min="1" style={{ ...inputStyle, width: 56, padding: "6px 8px", fontSize: 12.5 }}
+                                  value={t.recurrence.everyNDays || 3}
+                                  onChange={e => updateTask(t.id, { recurrence: { type: "custom", everyNDays: Math.max(1, Number(e.target.value) || 1) } })} />
+                              )}
                             </div>
                             {statusKey === STATUS.ACTIVE && (
                               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2844,7 +3018,7 @@ export default function RootSystem() {
                             ))}
                           </div>
                           <div style={{ flex: 1 }}>
-                            <HourGridColumn routines={dayRoutines} items={dayItems} categoryById={categoryById} compact={false} />
+                            <HourGridColumn routines={dayRoutines} items={dayItems} categoryById={categoryById} compact={false} onRescheduleTask={scheduleTaskTime} />
                           </div>
                         </div>
                       </div>
@@ -2876,7 +3050,7 @@ export default function RootSystem() {
                               <div key={i}>
                                 <div style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.ink }}>{DAY_LABELS[WEEK_ORDER[i]].slice(0,3).toUpperCase()} {d.getDate()}</div>
                                 {cycle && <div style={{ fontSize: 8, color: COLORS.sage, marginBottom: 2 }}>{cycle.phase}</div>}
-                                <HourGridColumn routines={dayRoutines} items={dayItems} categoryById={categoryById} compact={true} />
+                                <HourGridColumn routines={dayRoutines} items={dayItems} categoryById={categoryById} compact={true} onRescheduleTask={scheduleTaskTime} />
                               </div>
                             );
                           })}
