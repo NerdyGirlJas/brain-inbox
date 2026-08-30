@@ -581,6 +581,189 @@ function DecideForMe({ tasks, updateTask }) {
   );
 }
 
+const DOPAMINE_BANK_SEEDS = [
+  { text: "Step outside and feel the sun/air on your skin for 2 minutes", minutes: 2, craving: "bored", source: "Sunlight exposure boosts serotonin and alertness (Huberman Lab)" },
+  { text: "Do 20 jumping jacks or a 1-minute dance break", minutes: 2, craving: "bored", source: "Brief movement spikes dopamine and norepinephrine (Huberman Lab)" },
+  { text: "Text one person a genuine compliment", minutes: 2, craving: "lonely", source: "Prosocial acts reliably boost mood (positive psychology research)" },
+  { text: "Splash cold water on your face or hold an ice cube", minutes: 2, craving: "anxious", source: "Cold exposure activates the vagus nerve, lowering acute stress" },
+  { text: "Write down 3 things you're grateful for right now", minutes: 3, craving: "low", source: "Gratitude journaling has consistent mood-lift evidence (positive psychology)" },
+  { text: "Stretch your neck, shoulders, and hands for 3 minutes", minutes: 3, craving: "restless", source: "Brief movement breaks reduce restlessness and improve focus" },
+  { text: "Make a cup of tea and actually watch it steep", minutes: 5, craving: "bored", source: "Slow sensory tasks give a non-screen novelty hit" },
+  { text: "Call a friend or family member just to say hi", minutes: 5, craving: "lonely", source: "Real social connection outperforms parasocial/social-media contact for mood" },
+  { text: "Do a 5-minute box-breathing session (4-4-4-4)", minutes: 5, craving: "anxious", source: "Slow paced breathing measurably lowers cortisol (Huberman Lab)" },
+  { text: "Tidy one small surface — your desk, a drawer, your nightstand", minutes: 5, craving: "restless", source: "Small completed tasks trigger a real dopamine hit from closure" },
+  { text: "Read one chapter or 10 pages of a physical book", minutes: 10, craving: "bored", source: "Deep reading gives sustained engagement without the dopamine spike-crash of scrolling" },
+  { text: "Go for a short walk outside, no phone", minutes: 10, craving: "anxious", source: "Aerobic movement + daylight is one of the best-evidenced mood regulators" },
+  { text: "Journal for 10 minutes about whatever's actually on your mind", minutes: 10, craving: "low", source: "Expressive writing has strong evidence for emotional processing" },
+  { text: "Do a full body stretch or short yoga flow", minutes: 15, craving: "restless", source: "Movement + breath combined regulate the nervous system" },
+  { text: "Cook or prep something simple from scratch", minutes: 20, craving: "bored", source: "Tactile, goal-directed tasks satisfy the same novelty-seeking as scrolling, without the crash" },
+  { text: "Sit outside with no phone and just notice your surroundings", minutes: 20, craving: "anxious", source: "Unstructured attention/awe exposure lowers rumination (attention restoration theory)" },
+];
+const CRAVING_LABELS = { bored: "Bored", anxious: "Anxious / stressed", lonely: "Lonely", restless: "Restless", low: "Low / flat" };
+
+function DopamineBank({ customItems, setCustomItems, dismissedSeeds, setDismissedSeeds, count, setCount }) {
+  const items = useMemo(() =>
+    [...DOPAMINE_BANK_SEEDS.map((s, i) => ({ ...s, id: "seed-" + i, custom: false })).filter(s => !dismissedSeeds.includes(s.id)), ...customItems],
+    [customItems, dismissedSeeds]);
+  const [timeFilter, setTimeFilter] = useState("any");
+  const [cravingFilter, setCravingFilter] = useState("any");
+  const [showAdd, setShowAdd] = useState(false);
+  const [draft, setDraft] = useState({ text: "", minutes: 5, craving: "bored" });
+  const [picked, setPicked] = useState(null);
+
+  function matches(item) {
+    const timeOk = timeFilter === "any" || item.minutes <= Number(timeFilter);
+    const cravingOk = cravingFilter === "any" || item.craving === cravingFilter;
+    return timeOk && cravingOk;
+  }
+
+  function draw() {
+    const pool = items.filter(matches);
+    setPicked(pool.length ? pool[Math.floor(Math.random() * pool.length)] : null);
+  }
+
+  function addCustom() {
+    if (!draft.text.trim()) return;
+    setCustomItems(prev => [...prev, { id: uid(), text: draft.text.trim(), minutes: Number(draft.minutes) || 5, craving: draft.craving, custom: true }]);
+    setDraft({ text: "", minutes: 5, craving: "bored" });
+    setShowAdd(false);
+  }
+
+  function dismissItem(item) {
+    if (item.custom) setCustomItems(prev => prev.filter(i => i.id !== item.id));
+    else setDismissedSeeds(prev => [...prev, item.id]);
+    if (picked?.id === item.id) setPicked(null);
+  }
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}` }}>
+      <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, marginBottom: 4, fontFamily: BODY_FONT, textAlign: "center" }}>Dopamine Bank</h3>
+      <div style={{ fontSize: 12, color: COLORS.sage, marginBottom: 14, textAlign: "center" }}>Reaching for your phone? Try this instead.</div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <select value={cravingFilter} onChange={e => setCravingFilter(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+          <option value="any">Feeling anything</option>
+          {Object.entries(CRAVING_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        <select value={timeFilter} onChange={e => setTimeFilter(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+          <option value="any">Any amount of time</option>
+          <option value="2">2 min or less</option>
+          <option value="5">5 min or less</option>
+          <option value="10">10 min or less</option>
+          <option value="20">20 min or less</option>
+        </select>
+      </div>
+
+      {!picked ? (
+        <button onClick={draw} style={{ width: "100%", padding: 10, borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 600, cursor: "pointer", marginBottom: 10 }}>Give me something</button>
+      ) : (
+        <div style={{ textAlign: "center", marginBottom: 10 }}>
+          <div style={{ fontFamily: DISPLAY_FONT, fontSize: 16, marginBottom: 4 }}>{picked.text}</div>
+          <div style={{ fontSize: 11, color: COLORS.sage, marginBottom: 10 }}>~{picked.minutes} min{picked.source ? ` · ${picked.source}` : ""}</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => { setCount(c => c + 1); setPicked(null); }} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", fontSize: 12.5, cursor: "pointer" }}>Did it</button>
+            <button onClick={draw} style={{ flex: 1, padding: 8, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 12.5, cursor: "pointer" }}>Give me another</button>
+          </div>
+          <button onClick={() => dismissItem(picked)} style={{ fontSize: 11, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline", marginTop: 6 }}>Not for me — don't suggest this again</button>
+        </div>
+      )}
+      {items.filter(matches).length === 0 && !picked && <div style={{ fontSize: 12, color: COLORS.sage, textAlign: "center", marginBottom: 10 }}>Nothing matches those filters yet — add your own below.</div>}
+
+      {count > 0 && <div style={{ fontSize: 11.5, color: COLORS.sage, textAlign: "center", marginBottom: 10 }}>Reached for this instead of your phone {count} time{count === 1 ? "" : "s"} today.</div>}
+
+      <button onClick={() => setShowAdd(s => !s)} style={{ fontSize: 12, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", display: "block", margin: "0 auto 8px" }}>{showAdd ? "Cancel" : "+ Add your own"}</button>
+      {showAdd && (
+        <div style={{ background: COLORS.cream, borderRadius: 10, padding: 10, marginBottom: 10 }}>
+          <input value={draft.text} onChange={e => setDraft({ ...draft, text: e.target.value })} placeholder="What works for you?" style={{ ...inputStyle, width: "100%", boxSizing: "border-box", marginBottom: 8 }} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <select value={draft.craving} onChange={e => setDraft({ ...draft, craving: e.target.value })} style={inputStyle}>
+              {Object.entries(CRAVING_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+            <input type="number" min="1" value={draft.minutes} onChange={e => setDraft({ ...draft, minutes: e.target.value })} style={{ ...inputStyle, width: 70 }} />
+            <button onClick={addCustom} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", fontSize: 12.5, cursor: "pointer" }}>Add</button>
+          </div>
+        </div>
+      )}
+
+      {items.some(i => i.custom) && (
+        <div style={{ marginTop: 4 }}>
+          {items.filter(i => i.custom).map(i => (
+            <div key={i.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "4px 0" }}>
+              <span>{i.text} <span style={{ color: COLORS.sage }}>· {i.minutes}m</span></span>
+              <button onClick={() => dismissItem(i)} style={{ background: "none", border: "none", color: COLORS.sage, cursor: "pointer", fontSize: 11 }}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {dismissedSeeds.length > 0 && (
+        <button onClick={() => setDismissedSeeds([])} style={{ display: "block", margin: "8px auto 0", fontSize: 11, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+          Restore {dismissedSeeds.length} dismissed suggestion{dismissedSeeds.length === 1 ? "" : "s"}
+        </button>
+      )}
+    </div>
+  );
+}
+function StudyHubTasksWidget({ studyHubKey, onConnect, loadState, pending, onImport, onSkip, onReload }) {
+  const [keyInput, setKeyInput] = useState("");
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, padding: 16, border: `1px solid ${COLORS.lavenderLight}` }}>
+      <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, marginBottom: 12, fontFamily: BODY_FONT, textAlign: "center" }}>
+        Study Hub Tasks
+      </h3>
+      {!studyHubKey ? (
+        <div>
+          <p style={{ fontSize: 12, color: COLORS.ink, opacity: 0.7, textAlign: "center", marginBottom: 8 }}>
+            Pull open syllabus items and checkpoint steps in as tasks — read-only, nothing writes back.
+          </p>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              value={keyInput} onChange={e => setKeyInput(e.target.value)}
+              placeholder="Study Hub sync key"
+              style={{ flex: 1, padding: 7, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12 }}
+            />
+            <button
+              onClick={() => onConnect(keyInput)}
+              style={{ padding: "7px 12px", borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", fontSize: 12, cursor: "pointer" }}
+            >
+              Connect
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          {loadState === "loading" && <div style={{ fontSize: 12, color: COLORS.sage, textAlign: "center" }}>Checking Study Hub…</div>}
+          {loadState === "error" && (
+            <button onClick={onReload} style={{ width: "100%", padding: 7, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 12 }}>
+              Couldn't reach Study Hub — try again
+            </button>
+          )}
+          {loadState === "loaded" && pending.length === 0 && (
+            <div style={{ fontSize: 12, color: COLORS.ink, opacity: 0.6, textAlign: "center" }}>Nothing open right now — you're caught up.</div>
+          )}
+          {pending.map(item => (
+            <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${COLORS.lavenderLight}` }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12.5 }}>{item.text}</div>
+                <div style={{ fontSize: 10.5, color: COLORS.sage }}>{item.source}</div>
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={() => onImport(item)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "none", background: COLORS.sage, color: "#fff", cursor: "pointer" }}>Add</button>
+                <button onClick={() => onSkip(item.id)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", cursor: "pointer" }}>Skip</button>
+              </div>
+            </div>
+          ))}
+          {(loadState === "loaded" || loadState === "error") && (
+            <button onClick={onReload} style={{ marginTop: 8, width: "100%", padding: 6, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 11, color: COLORS.sage, cursor: "pointer" }}>
+              Check again
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CurrentlyReadingWidget({ book, setBook, libraryKey, saveLibraryKey, libraryLoadState, loadLibrary, libraryBooks, linkedBook, linkBook, unlinkBook, onDragCommit, pageSaveState }) {
   const setField = patch => setBook(prev => ({ ...prev, ...patch }));
   const progress = book.progress || 0;
@@ -1207,11 +1390,19 @@ export default function RootSystem() {
   const [showPastAnswers, setShowPastAnswers] = useState(false);
   const [readingBook, setReadingBook] = useState({ title: "", progress: 0, quote: "", note: "" });
   const [libraryKey, setLibraryKey] = useState("");
+  const [studyHubKey, setStudyHubKey] = useState("");
+  const [studyHubLoadState, setStudyHubLoadState] = useState("idle"); // idle | loading | loaded | error
+  const [studyHubPending, setStudyHubPending] = useState([]);
+  const [importedStudyHubIds, setImportedStudyHubIds] = useState([]);
   const [libraryBooks, setLibraryBooks] = useState([]);
   const [libraryLoadState, setLibraryLoadState] = useState("idle"); // idle | loading | loaded | error
   const [linkedBookId, setLinkedBookId] = useState(null);
   const [cupFilled, setCupFilled] = useState([]); // array of cup category ids filled today, reset daily by date check
   const [cupDate, setCupDate] = useState(toKey(new Date()));
+  const [dopamineBankCustom, setDopamineBankCustom] = useState([]);
+  const [dopamineBankDismissed, setDopamineBankDismissed] = useState([]);
+  const [dopamineBankCount, setDopamineBankCount] = useState(0);
+  const [dopamineBankCountDate, setDopamineBankCountDate] = useState(toKey(new Date()));
   const [wheelLog, setWheelLog] = useState([]);     // [{weekStart, scores}]
   const [sscrLog, setSscrLog] = useState([]);       // [{weekStart, start, stop, continueX, release}]
   const [closeoutLog, setCloseoutLog] = useState([]); // [{weekStart, wins, gratitude, closing, tomorrow}]
@@ -1244,7 +1435,69 @@ export default function RootSystem() {
   }
 
   const LIBRARY_URL = "https://root-restore-library-tracker.netlify.app/api/library";
+  const STUDY_HUB_URL = "https://studyhub08.netlify.app/api/study-hub";
   const CUP_CATEGORIES = ["Movement", "Nourish", "Rest", "Nature", "Connect", "Create", "Spirit", "Joy"];
+
+  // Pulls open syllabus items and unchecked checkpoint sub-items from Study
+  // Hub — read-only. Nothing here ever writes back to Study Hub; marking a
+  // task done in Brain Inbox does not touch the syllabus/checkpoint source,
+  // same one-way discipline as the Library Tracker bridge already uses.
+  // Study Hub's getAllHubData() strips its internal "rr-study-hub:" prefix,
+  // so the fields we want arrive as data["rr-phd-tasks"] and
+  // data["rr-phd-checkpoints"] — the same keys Study Hub's own useStore
+  // calls were given.
+  function loadStudyHubTasks(key) {
+    if (!key.trim() || studyHubLoadState === "loading") return;
+    setStudyHubLoadState("loading");
+    fetch(STUDY_HUB_URL + "?key=" + encodeURIComponent(key.trim()))
+      .then(r => r.ok ? r.json() : Promise.reject(new Error("Study Hub load failed")))
+      .then(res => {
+        const data = res.data || {};
+        const syllabus = data["rr-phd-tasks"] || [];
+        const checkpoints = data["rr-phd-checkpoints"] || [];
+        const items = [];
+        syllabus.forEach(t => {
+          if (t.status !== "done") {
+            items.push({ id: `syllabus-${t.id}`, text: t.title, source: t.quarter ? `Syllabus · ${t.quarter}` : "Syllabus" });
+          }
+        });
+        checkpoints.forEach(cp => {
+          (cp.items || []).forEach((text, idx) => {
+            const checked = (cp.checked || {})[idx];
+            if (!checked) {
+              items.push({ id: `checkpoint-${cp.id}-${idx}`, text, source: `Checkpoint · ${cp.title}` });
+            }
+          });
+        });
+        setStudyHubPending(items.filter(i => !importedStudyHubIds.includes(i.id)));
+        setStudyHubLoadState("loaded");
+      })
+      .catch(err => { console.error("Study Hub load failed:", err); setStudyHubLoadState("error"); });
+  }
+
+  function connectStudyHub(key) {
+    setStudyHubKey(key);
+    loadStudyHubTasks(key);
+  }
+
+  // Imports one Study Hub item as a real Brain Inbox task, auto-creating a
+  // "Dissertation" category on first use if one doesn't already exist.
+  function importStudyHubTask(item) {
+    setCategories(prev => prev.some(c => c.id === "dissertation")
+      ? prev
+      : [...prev, { id: "dissertation", label: "Dissertation", color: COLORS.sage }]);
+    setTasks(ts => [{
+      id: uid(), text: item.text, category: "dissertation", status: STATUS.ACTIVE,
+      estMinutes: null, scheduledDate: null, mode: CATEGORY_MODE_DEFAULTS["dissertation"] || null,
+    }, ...ts]);
+    setImportedStudyHubIds(prev => [...prev, item.id]);
+    setStudyHubPending(prev => prev.filter(p => p.id !== item.id));
+  }
+
+  function skipStudyHubTask(id) {
+    setImportedStudyHubIds(prev => [...prev, id]);
+    setStudyHubPending(prev => prev.filter(p => p.id !== id));
+  }
 
   function toggleCup(cat) {
     setCupFilled(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
@@ -1322,6 +1575,7 @@ export default function RootSystem() {
   useEffect(() => {
     const todayKey = toKey(new Date());
     if (cupDate !== todayKey) { setCupFilled([]); setCupDate(todayKey); }
+    if (dopamineBankCountDate !== todayKey) { setDopamineBankCount(0); setDopamineBankCountDate(todayKey); }
   }, []);
 
   /* ---------- calendar settings (from original Calendar Maker) ---------- */
@@ -1549,9 +1803,15 @@ export default function RootSystem() {
         if (data.todayLog) setTodayLog(data.todayLog);
         if (data.readingBook) setReadingBook(data.readingBook);
         if (data.libraryKey) { setLibraryKey(data.libraryKey); loadLibrary(data.libraryKey); }
+        if (data.studyHubKey) { setStudyHubKey(data.studyHubKey); loadStudyHubTasks(data.studyHubKey); }
+        if (data.importedStudyHubIds) setImportedStudyHubIds(data.importedStudyHubIds);
         if (data.linkedBookId) setLinkedBookId(data.linkedBookId);
         if (data.cupFilled) setCupFilled(data.cupFilled);
         if (data.cupDate) setCupDate(data.cupDate);
+        if (data.dopamineBankCustom) setDopamineBankCustom(data.dopamineBankCustom);
+        if (data.dopamineBankDismissed) setDopamineBankDismissed(data.dopamineBankDismissed);
+        if (data.dopamineBankCount !== undefined) setDopamineBankCount(data.dopamineBankCount);
+        if (data.dopamineBankCountDate) setDopamineBankCountDate(data.dopamineBankCountDate);
         if (data.dailyThreeIds) setDailyThreeIds(data.dailyThreeIds);
         if (data.wheelLog) setWheelLog(data.wheelLog);
         if (data.sscrLog) setSscrLog(data.sscrLog);
@@ -1577,6 +1837,8 @@ export default function RootSystem() {
           cycleStart, cycleLength, periodLength, includeHolidays, themeBg, themeAccent, themeHighlight,
           routines, showRoutinesOnMonth, showRoutinesOnWeek,
           todayLog, readingBook, libraryKey, linkedBookId, cupFilled, cupDate, dailyThreeIds, wheelLog, sscrLog, closeoutLog,
+          studyHubKey, importedStudyHubIds,
+          dopamineBankCustom, dopamineBankDismissed, dopamineBankCount, dopamineBankCountDate,
         };
         const res = await fetch("/.netlify/functions/data", {
           method: "POST",
@@ -1590,7 +1852,7 @@ export default function RootSystem() {
       }
     }, 700);
     return () => clearTimeout(handle);
-  }, [isLoaded, inboxItems, tasks, categories, events, savedQuotes, quote, author, weekStart, cycleStart, cycleLength, periodLength, includeHolidays, themeBg, themeAccent, themeHighlight, routines, showRoutinesOnMonth, showRoutinesOnWeek, todayLog, readingBook, libraryKey, linkedBookId, cupFilled, cupDate, dailyThreeIds, wheelLog, sscrLog, closeoutLog]);
+  }, [isLoaded, inboxItems, tasks, categories, events, savedQuotes, quote, author, weekStart, cycleStart, cycleLength, periodLength, includeHolidays, themeBg, themeAccent, themeHighlight, routines, showRoutinesOnMonth, showRoutinesOnWeek, todayLog, readingBook, libraryKey, linkedBookId, cupFilled, cupDate, dailyThreeIds, wheelLog, sscrLog, closeoutLog, studyHubKey, importedStudyHubIds, dopamineBankCustom, dopamineBankDismissed, dopamineBankCount, dopamineBankCountDate]);
 
   /* ---------- cycle sync: pull cycleStart/cycleLength/periodLength from the Lunar app ---------- */
   useEffect(() => {
@@ -2216,6 +2478,10 @@ export default function RootSystem() {
               <DecideForMe tasks={tasksByStatus[STATUS.ACTIVE]} updateTask={updateTask} />
             </div>
 
+            <div style={{ marginBottom: 20 }}>
+              <DopamineBank customItems={dopamineBankCustom} setCustomItems={setDopamineBankCustom} dismissedSeeds={dopamineBankDismissed} setDismissedSeeds={setDopamineBankDismissed} count={dopamineBankCount} setCount={setDopamineBankCount} />
+            </div>
+
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }} className="today-grid">
               <div>
                 <CurrentlyReadingWidget
@@ -2253,6 +2519,18 @@ export default function RootSystem() {
                   <span style={{ fontSize: 11, color: COLORS.sage }}>{cupFilled.length}/{CUP_CATEGORIES.length}</span>
                 </div>
               </div>
+            </div>
+
+            <div style={{ marginTop: 20 }}>
+              <StudyHubTasksWidget
+                studyHubKey={studyHubKey}
+                onConnect={connectStudyHub}
+                loadState={studyHubLoadState}
+                pending={studyHubPending}
+                onImport={importStudyHubTask}
+                onSkip={skipStudyHubTask}
+                onReload={() => loadStudyHubTasks(studyHubKey)}
+              />
             </div>
 
             <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginTop: 20 }}>
