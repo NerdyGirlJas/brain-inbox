@@ -2212,7 +2212,7 @@ export default function RootSystem() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `tulsi-grace-system-backup-${toKey(new Date())}.json`;
+    a.download = `tulsi-restore-system-backup-${toKey(new Date())}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -2465,6 +2465,18 @@ export default function RootSystem() {
                 {tasksByStatus[STATUS.ACTIVE].filter(t => t.scheduledDate === toKey(new Date())).length === 0 && <div style={{ fontSize: 13, color: COLORS.ink, opacity: 0.6, textAlign: "center" }}>Nothing scheduled for today yet — quick-add one above, or schedule an Active task for today from Task Lists or the Calendar.</div>}
               </div>
 
+            <div style={{ marginBottom: 20 }}>
+              <StudyHubTasksWidget
+                studyHubKey={studyHubKey}
+                onConnect={connectStudyHub}
+                loadState={studyHubLoadState}
+                pending={studyHubPending}
+                onImport={importStudyHubTask}
+                onSkip={skipStudyHubTask}
+                onReload={() => loadStudyHubTasks(studyHubKey)}
+              />
+            </div>
+
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }} className="today-grid">
               <div>
                 <FocusTimer tasks={tasksByStatus[STATUS.ACTIVE]} onSessionComplete={t => { if (t) updateTask(t.id, { status: STATUS.COMPLETED }); }} />
@@ -2519,18 +2531,6 @@ export default function RootSystem() {
                   <span style={{ fontSize: 11, color: COLORS.sage }}>{cupFilled.length}/{CUP_CATEGORIES.length}</span>
                 </div>
               </div>
-            </div>
-
-            <div style={{ marginTop: 20 }}>
-              <StudyHubTasksWidget
-                studyHubKey={studyHubKey}
-                onConnect={connectStudyHub}
-                loadState={studyHubLoadState}
-                pending={studyHubPending}
-                onImport={importStudyHubTask}
-                onSkip={skipStudyHubTask}
-                onReload={() => loadStudyHubTasks(studyHubKey)}
-              />
             </div>
 
             <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginTop: 20 }}>
