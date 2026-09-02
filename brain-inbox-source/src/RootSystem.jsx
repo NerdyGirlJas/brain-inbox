@@ -111,7 +111,13 @@ function topUpRecurringSeries(currentTasks) {
     const latestDate = withDates.reduce((max, t) => (t.scheduledDate > max ? t.scheduledDate : max), withDates[0].scheduledDate);
     const latestInstances = withDates.filter(t => t.scheduledDate === latestDate);
     const template = latestInstances[0];
-    const timeSlots = [...new Set(latestInstances.map(t => t.scheduleTime || null))];
+    // recurrence.times is now the authoritative list of times-per-day for a
+    // series — set explicitly via the Recurring Tasks editor. Falling back
+    // to whatever times already exist on the latest date covers series
+    // created before this existed, so nothing already-generated breaks.
+    const timeSlots = (template.recurrence.times && template.recurrence.times.length > 0)
+      ? [...new Set(template.recurrence.times)]
+      : [...new Set(latestInstances.map(t => t.scheduleTime || null))];
 
     const existingKeys = new Set(instances.map(t => `${t.scheduledDate}|${t.scheduleTime || ""}`));
 
@@ -513,19 +519,88 @@ function pickTaskForMe(tasks, mode) {
   return pool[pool.length - 1];
 }
 
-function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addRecurringTask, duplicateTask, addTimeSlot, stopRepeatingSeries, onPruneExcess, onDeleteSeries }) {
+// One row = one recurring series, with all its times editable together as
+// chips rather than as separate task boxes. Deliberately its own small
+// component (not inlined in RecurringTasksManager's .map) so the "type a
+// new time" input can hold its own local state without needing to be
+// tracked per-row in the parent.
+function RecurringSeriesRow({ sid, representative: t, count, nextDate, categories, mergeCandidates, onUpdateTimes, onMergeSeries, duplicateTask, stopRepeatingSeries, onDeleteSeries }) {
+  const [newTime, setNewTime] = useState("");
+  const cat = t.category ? categories.find(c => c.id === t.category) : null;
+  const rec = RECURRENCE_OPTIONS.find(r => r.id === t.recurrence.type);
+  const modeInfo = t.mode ? COGNITIVE_MODES.find(m => m.id === t.mode) : null;
+  const recurrenceLabel = t.recurrence.type === "custom" ? `every ${t.recurrence.everyNDays || 1} days`
+    : t.recurrence.type === "weekdays" ? `weekly on ${(t.recurrence.days || []).map(d => d[0]).join("")}`
+    : rec?.label.toLowerCase();
+  const times = (t.recurrence.times && t.recurrence.times.length > 0) ? t.recurrence.times : (t.scheduleTime ? [t.scheduleTime] : []);
+
+  function addTime() {
+    if (!newTime || times.includes(newTime)) { setNewTime(""); return; }
+    onUpdateTimes(t, [...times, newTime]);
+    setNewTime("");
+  }
+  function removeTime(time) {
+    if (times.length <= 1) { alert("A recurring task needs at least one time — add a replacement before removing the last one, or use Delete to remove the whole series."); return; }
+    onUpdateTimes(t, times.filter(x => x !== time));
+  }
+
+  return (
+    <div style={{ padding: "8px 12px", background: COLORS.cream, borderRadius: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <span style={{ fontSize: 13.5 }}>{t.text}</span>
+          <span style={{ fontSize: 11.5, color: COLORS.sage, marginLeft: 8 }}>
+            ↻ {recurrenceLabel}
+            {cat && ` · ${cat.label}`}{modeInfo && ` · ${modeInfo.label}`}
+            {nextDate && ` · next ${nextDate}`}{count > times.length && ` · ${count} upcoming`}
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => duplicateTask(t)} title="Independent copy, its own separate series" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Duplicate</button>
+          <button onClick={() => stopRepeatingSeries(t)} title="Stops this series — also removes any already-generated future occurrences" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Stop repeating</button>
+          <button onClick={() => { if (window.confirm(`Delete "${t.text}" entirely? This removes all ${count} upcoming occurrence${count === 1 ? "" : "s"} of this recurring task, not just one. Anything already completed is kept as history.`)) onDeleteSeries(sid); }} style={{ fontSize: 11.5, color: "#a0524a", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Delete</button>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+        <span style={{ fontSize: 10.5, color: COLORS.sage, fontWeight: 600 }}>TIMES</span>
+        {times.map(time => (
+          <span key={time} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, background: "#fff", border: `1px solid ${COLORS.lavenderLight}`, borderRadius: 999, padding: "3px 8px" }}>
+            {time}
+            <button onClick={() => removeTime(time)} title="Remove this time" style={{ border: "none", background: "none", color: COLORS.sage, cursor: "pointer", fontSize: 11, lineHeight: 1, padding: 0 }}>×</button>
+          </span>
+        ))}
+        <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)} style={{ ...inputStyle, width: 100, padding: "3px 6px", fontSize: 11.5 }} />
+        <button onClick={addTime} disabled={!newTime} style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: newTime ? "pointer" : "default", opacity: newTime ? 1 : 0.4, textDecoration: "underline" }}>+ add time</button>
+      </div>
+
+      {mergeCandidates.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <select
+            value=""
+            onChange={e => { if (e.target.value) onMergeSeries(t, mergeCandidates.find(c => c.sid === e.target.value)?.representative); }}
+            style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: "auto" }}
+          >
+            <option value="">Merge in another recurring task...</option>
+            {mergeCandidates.map(c => <option key={c.sid} value={c.sid}>{c.representative.text}</option>)}
+          </select>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addRecurringTask, duplicateTask, stopRepeatingSeries, onPruneExcess, onDeleteSeries, onUpdateTimes, onMergeSeries }) {
   const [collapsed, setCollapsed] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [draft, setDraft] = useState({ text: "", category: categories[0]?.id || "", mode: "", recurrenceType: "weekly", everyNDays: 3, days: ["MO", "TU", "WE", "TH", "FR"] });
 
   const recurringTasks = tasks.filter(t => t.recurrence && (t.status === STATUS.ACTIVE || t.status === STATUS.SOMEDAY));
 
-  // Grouped by series so a Mon–Fri task shows as ONE row with "5 upcoming"
-  // rather than five separate-looking rows — this is the direct fix for
-  // the over-generation incident making the list look duplicated. Actions
-  // (add another time, duplicate, stop repeating) act on the soonest
-  // not-yet-completed instance, which is a reasonable representative for
-  // the whole series.
+  // Grouped by series so a Mon–Fri task shows as ONE row regardless of how
+  // many individual dated instances exist underneath, and — separately —
+  // regardless of how many TIMES a day it happens, since those are now
+  // edited together on that one row instead of needing their own rows.
   const seriesGroups = useMemo(() => {
     const bySeries = {};
     recurringTasks.forEach(t => {
@@ -614,32 +689,19 @@ function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addR
             <div style={{ fontSize: 13, color: COLORS.sage, textAlign: "center", padding: 10 }}>No recurring tasks yet.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {seriesGroups.map(({ sid, representative: t, count, nextDate }) => {
-                const cat = t.category ? categories.find(c => c.id === t.category) : null;
-                const rec = RECURRENCE_OPTIONS.find(r => r.id === t.recurrence.type);
-                const modeInfo = t.mode ? COGNITIVE_MODES.find(m => m.id === t.mode) : null;
-                const recurrenceLabel = t.recurrence.type === "custom" ? `every ${t.recurrence.everyNDays || 1} days`
-                  : t.recurrence.type === "weekdays" ? `weekly on ${(t.recurrence.days || []).map(d => d[0]).join("")}`
-                  : rec?.label.toLowerCase();
-                return (
-                  <div key={sid} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: COLORS.cream, borderRadius: 8, flexWrap: "wrap", gap: 8 }}>
-                    <div>
-                      <span style={{ fontSize: 13.5 }}>{t.text}</span>
-                      <span style={{ fontSize: 11.5, color: COLORS.sage, marginLeft: 8 }}>
-                        ↻ {recurrenceLabel}{t.scheduleTime ? ` · ${t.scheduleTime}` : ""}
-                        {cat && ` · ${cat.label}`}{modeInfo && ` · ${modeInfo.label}`}
-                        {nextDate && ` · next ${nextDate}`}{count > 1 && ` · ${count} upcoming`}
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", gap: 10 }}>
-                      <button onClick={() => addTimeSlot(t)} title="Add another time today, same recurring series" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>+ Add another time</button>
-                      <button onClick={() => duplicateTask(t)} title="Independent copy, its own separate series" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Duplicate</button>
-                      <button onClick={() => stopRepeatingSeries(t)} title="Stops this series — also removes any already-generated future occurrences" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Stop repeating</button>
-                      <button onClick={() => { if (window.confirm(`Delete "${t.text}" entirely? This removes all ${count} upcoming occurrence${count === 1 ? "" : "s"} of this recurring task, not just one. Anything already completed is kept as history.`)) onDeleteSeries(sid); }} style={{ fontSize: 11.5, color: "#a0524a", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Delete</button>
-                    </div>
-                  </div>
-                );
-              })}
+              {seriesGroups.map(group => (
+                <RecurringSeriesRow
+                  key={group.sid}
+                  {...group}
+                  categories={categories}
+                  mergeCandidates={seriesGroups.filter(g => g.sid !== group.sid && g.representative.recurrence.type === group.representative.recurrence.type)}
+                  onUpdateTimes={onUpdateTimes}
+                  onMergeSeries={onMergeSeries}
+                  duplicateTask={duplicateTask}
+                  stopRepeatingSeries={stopRepeatingSeries}
+                  onDeleteSeries={onDeleteSeries}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -2255,6 +2317,30 @@ export default function RootSystem() {
   function deleteRecurringSeries(sid) {
     setTasks(prev => prev.filter(t => (t.seriesId || t.id) !== sid || t.status === STATUS.COMPLETED));
   }
+  // Sets the authoritative times-per-day list on a series directly, rather
+  // than the old approach of creating a whole separate sibling task object
+  // per extra time. Goes through the same recurrence-change path used
+  // elsewhere (delete not-yet-completed future instances, let the rolling
+  // top-up regenerate) so the actual dated+timed rows the calendar and
+  // checkoffs rely on stay correct — the difference is purely that the
+  // definition of "how many times a day" now lives in one place instead of
+  // being inferred from whatever instances happen to already exist.
+  function updateSeriesTimes(representative, times) {
+    updateSeriesForward(representative, { recurrence: { ...representative.recurrence, times: times.filter(Boolean) } });
+  }
+  // For consolidating series that should never have been separate in the
+  // first place — e.g. three routines that were each converted into their
+  // own recurring task, when really they're one task done three times a
+  // day. Folds the other series' time(s) into this one and removes the
+  // other series entirely (its completed history is kept, same as any
+  // other series deletion).
+  function mergeSeriesInto(target, source) {
+    const targetTimes = (target.recurrence.times && target.recurrence.times.length) ? target.recurrence.times : [target.scheduleTime || null];
+    const sourceTimes = (source.recurrence.times && source.recurrence.times.length) ? source.recurrence.times : [source.scheduleTime || null];
+    const mergedTimes = [...new Set([...targetTimes, ...sourceTimes].filter(Boolean))];
+    updateSeriesForward(target, { recurrence: { ...target.recurrence, times: mergedTimes } });
+    deleteRecurringSeries(source.seriesId || source.id);
+  }
   function stopRepeatingSeries(task) {
     const sid = task.seriesId || task.id;
     setTasks(prev => prev
@@ -2305,6 +2391,39 @@ export default function RootSystem() {
     const propagate = window.confirm("Apply this change to this and all future occurrences?\n\nOK = this and future occurrences\nCancel = just this one occurrence");
     if (propagate) updateSeriesForward(task, patch);
     else updateTask(task.id, patch);
+  }
+  // Retiming a single occurrence needs its own path once a series can have
+  // multiple times a day: the generic "apply to future" (above) would set
+  // every instance in the series to the SAME new time, collapsing three
+  // distinct daily times into one and silently recreating same-time
+  // duplicates — the exact clutter the times-chip redesign exists to
+  // prevent. This only retimes the occurrences that were at THIS specific
+  // time slot, and updates the series' times list to match, so the other
+  // time slots in a merged series are left alone.
+  function applyTimeChange(task, newTime) {
+    if (!task.recurrence) { updateTask(task.id, { scheduleTime: newTime }); return; }
+    const propagate = window.confirm("Apply this time change to this and all future occurrences?\n\nOK = this and future occurrences\nCancel = just this one occurrence");
+    if (!propagate) { updateTask(task.id, { scheduleTime: newTime }); return; }
+
+    const oldTime = task.scheduleTime || null;
+    const hasMultipleTimes = task.recurrence.times && task.recurrence.times.length > 1;
+    if (!hasMultipleTimes) { updateSeriesForward(task, { scheduleTime: newTime }); return; }
+
+    const sid = task.seriesId || task.id;
+    const isPast = (t) => t.scheduledDate && task.scheduledDate && t.scheduledDate < task.scheduledDate;
+    const inSeries = (t) => t.id === task.id || t.seriesId === sid;
+    const newTimes = task.recurrence.times.map(t => t === oldTime ? newTime : t);
+    setTasks(prev => prev.map(t => {
+      if (!inSeries(t)) return t;
+      if (t.status === STATUS.COMPLETED || isPast(t)) return t;
+      // Every instance in the series gets the updated times list, so
+      // whichever one ends up as the series' "representative" in the
+      // management view always shows the current times — only the actual
+      // scheduleTime is limited to the matching slot's instances.
+      const withNewTimes = { ...t, recurrence: { ...t.recurrence, times: newTimes } };
+      if ((t.scheduleTime || null) !== oldTime) return withNewTimes;
+      return { ...withNewTimes, scheduleTime: newTime };
+    }));
   }
   function scheduleTask(id, date) {
     updateTask(id, { scheduledDate: date });
@@ -3025,7 +3144,7 @@ export default function RootSystem() {
               </div>
             </div>
 
-            <RecurringTasksManager tasks={tasks} categories={categories} updateTask={updateTask} deleteTask={deleteTask} addRecurringTask={addRecurringTask} duplicateTask={duplicateTask} addTimeSlot={addTimeSlot} stopRepeatingSeries={stopRepeatingSeries} onPruneExcess={pruneExcessRecurringOccurrences} onDeleteSeries={deleteRecurringSeries} />
+            <RecurringTasksManager tasks={tasks} categories={categories} updateTask={updateTask} deleteTask={deleteTask} addRecurringTask={addRecurringTask} duplicateTask={duplicateTask} stopRepeatingSeries={stopRepeatingSeries} onPruneExcess={pruneExcessRecurringOccurrences} onDeleteSeries={deleteRecurringSeries} onUpdateTimes={updateSeriesTimes} onMergeSeries={mergeSeriesInto} />
 
             {(() => {
               const statusesToShow =
@@ -3169,7 +3288,7 @@ export default function RootSystem() {
                                   <input
                                     type="time" title="Optional time \u2014 shows this task on the hour grid" style={{ ...inputStyle, width: 110, padding: "6px 8px" }}
                                     value={t.scheduleTime || ""}
-                                    onChange={e => applyToSeriesOrSingle(t, { scheduleTime: e.target.value || null })}
+                                    onChange={e => applyTimeChange(t, e.target.value || null)}
                                   />
                                 )}
                               </div>
