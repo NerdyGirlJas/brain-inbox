@@ -41,6 +41,7 @@ const NEW_CATEGORY_COLORS = ["#c98a3e", "#4f7a6b", "#9c5b8f", "#6b7fae", "#b3562
 
 const RECURRENCE_OPTIONS = [
   { id: "daily", label: "Daily" },
+  { id: "weekdays", label: "Specific weekdays" },
   { id: "weekly", label: "Weekly" },
   { id: "monthly", label: "Monthly" },
   { id: "annually", label: "Annually" },
@@ -52,6 +53,21 @@ function nextRecurrenceDate(fromDateKey, recurrence) {
   const [y, m, d] = fromDateKey.split("-").map(Number);
   const date = new Date(y, m - 1, d);
   if (recurrence.type === "daily") date.setDate(date.getDate() + 1);
+  else if (recurrence.type === "weekdays") {
+    // No days selected means nothing to recur on — return null (stop
+    // recurring) rather than silently defaulting to every day, which
+    // would be a real, unintended behavior change if someone deselects
+    // every checkbox mid-edit.
+    if (!recurrence.days || recurrence.days.length === 0) return null;
+    const days = recurrence.days;
+    for (let i = 1; i <= 7; i++) {
+      const candidate = new Date(date);
+      candidate.setDate(date.getDate() + i);
+      const code = WEEK_ORDER[(candidate.getDay() + 6) % 7];
+      if (days.includes(code)) return toKey(candidate);
+    }
+    return null;
+  }
   else if (recurrence.type === "weekly") date.setDate(date.getDate() + 7);
   else if (recurrence.type === "monthly") date.setMonth(date.getMonth() + 1);
   else if (recurrence.type === "annually") date.setFullYear(date.getFullYear() + 1);
@@ -434,10 +450,10 @@ function pickTaskForMe(tasks, mode) {
   return pool[pool.length - 1];
 }
 
-function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addRecurringTask }) {
+function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addRecurringTask, duplicateTask }) {
   const [collapsed, setCollapsed] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [draft, setDraft] = useState({ text: "", category: categories[0]?.id || "", mode: "", recurrenceType: "weekly", everyNDays: 3 });
+  const [draft, setDraft] = useState({ text: "", category: categories[0]?.id || "", mode: "", recurrenceType: "weekly", everyNDays: 3, days: ["MO", "TU", "WE", "TH", "FR"] });
 
   const recurringTasks = tasks.filter(t => t.recurrence && (t.status === STATUS.ACTIVE || t.status === STATUS.SOMEDAY));
 
@@ -445,9 +461,13 @@ function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addR
     if (!draft.text.trim()) return;
     addRecurringTask({
       text: draft.text.trim(), category: draft.category || null, mode: draft.mode || null,
-      recurrence: { type: draft.recurrenceType, everyNDays: draft.recurrenceType === "custom" ? Math.max(1, Number(draft.everyNDays) || 1) : undefined },
+      recurrence: {
+        type: draft.recurrenceType,
+        everyNDays: draft.recurrenceType === "custom" ? Math.max(1, Number(draft.everyNDays) || 1) : undefined,
+        days: draft.recurrenceType === "weekdays" ? draft.days : undefined,
+      },
     });
-    setDraft({ text: "", category: categories[0]?.id || "", mode: "", recurrenceType: "weekly", everyNDays: 3 });
+    setDraft({ text: "", category: categories[0]?.id || "", mode: "", recurrenceType: "weekly", everyNDays: 3, days: ["MO", "TU", "WE", "TH", "FR"] });
     setShowAdd(false);
   }
 
@@ -481,6 +501,17 @@ function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addR
                   <input type="number" min="1" style={{ ...inputStyle, width: 70 }} value={draft.everyNDays} onChange={e => setDraft({ ...draft, everyNDays: e.target.value })} />
                 )}
               </div>
+              {draft.recurrenceType === "weekdays" && (
+                <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+                  {WEEK_ORDER.map(code => {
+                    const active = draft.days.includes(code);
+                    return (
+                      <button key={code} onClick={() => setDraft({ ...draft, days: active ? draft.days.filter(d => d !== code) : [...draft.days, code] })}
+                        style={{ width: 30, height: 30, borderRadius: "50%", border: `1px solid ${active ? COLORS.sage : COLORS.lavenderLight}`, background: active ? COLORS.sage : "#fff", color: active ? "#fff" : COLORS.ink, fontSize: 11, cursor: "pointer" }}>{code[0]}</button>
+                    );
+                  })}
+                </div>
+              )}
               <button onClick={commitAdd} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", fontSize: 13, cursor: "pointer" }}>Add recurring task</button>
             </div>
           )}
@@ -493,16 +524,20 @@ function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addR
                 const cat = t.category ? categories.find(c => c.id === t.category) : null;
                 const rec = RECURRENCE_OPTIONS.find(r => r.id === t.recurrence.type);
                 const modeInfo = t.mode ? COGNITIVE_MODES.find(m => m.id === t.mode) : null;
+                const recurrenceLabel = t.recurrence.type === "custom" ? `every ${t.recurrence.everyNDays || 1} days`
+                  : t.recurrence.type === "weekdays" ? `weekly on ${(t.recurrence.days || []).map(d => d[0]).join("")}`
+                  : rec?.label.toLowerCase();
                 return (
                   <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: COLORS.cream, borderRadius: 8, flexWrap: "wrap", gap: 8 }}>
                     <div>
                       <span style={{ fontSize: 13.5 }}>{t.text}</span>
                       <span style={{ fontSize: 11.5, color: COLORS.sage, marginLeft: 8 }}>
-                        ↻ {t.recurrence.type === "custom" ? `every ${t.recurrence.everyNDays || 1} days` : rec?.label.toLowerCase()}
+                        ↻ {recurrenceLabel}{t.scheduleTime ? ` · ${t.scheduleTime}` : ""}
                         {cat && ` · ${cat.label}`}{modeInfo && ` · ${modeInfo.label}`}
                       </span>
                     </div>
                     <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => duplicateTask(t)} style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Duplicate</button>
                       <button onClick={() => updateTask(t.id, { recurrence: null })} style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Stop repeating</button>
                       <button onClick={() => { if (window.confirm(`Delete "${t.text}" entirely? This removes the task itself, not just its recurrence.`)) deleteTask(t.id); }} style={{ fontSize: 11.5, color: "#a0524a", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Delete</button>
                     </div>
@@ -514,6 +549,48 @@ function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addR
         </div>
       )}
     </div>
+  );
+}
+
+function DailyThreeSlots({ ids, setSlot, tasks, categories, editingSlot, setEditingSlot, drafts, setDrafts, categoryDrafts, setCategoryDrafts, onQuickAdd, updateTask, readOnlyDone }) {
+  return (
+    <>
+      {[0, 1, 2].map(slot => {
+        const assigned = tasks.find(t => t.id === ids[slot]);
+        return (
+          <div key={slot} style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontFamily: DISPLAY_FONT, fontSize: 12, color: COLORS.lavender, width: 20 }}>{String(slot + 1).padStart(2, "0")}</span>
+              {assigned ? (
+                <>
+                  <span style={{ flex: 1, fontSize: 13, textDecoration: assigned.status === STATUS.COMPLETED ? "line-through" : "none", opacity: assigned.status === STATUS.COMPLETED ? 0.5 : 1 }}>{assigned.text}</span>
+                  {updateTask && !readOnlyDone && (
+                    <input type="checkbox" checked={assigned.status === STATUS.COMPLETED} onChange={e => updateTask(assigned.id, { status: e.target.checked ? STATUS.COMPLETED : STATUS.ACTIVE })} />
+                  )}
+                  <button onClick={() => setSlot(slot, null)} style={{ border: "none", background: "transparent", color: COLORS.sage, fontSize: 12, cursor: "pointer" }}>&times;</button>
+                </>
+              ) : (
+                <button onClick={() => setEditingSlot(editingSlot === slot ? null : slot)} style={{ flex: 1, textAlign: "left", padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 13, color: COLORS.sage, cursor: "pointer" }}>Choose or add a task…</button>
+              )}
+            </div>
+            {editingSlot === slot && !assigned && (
+              <div style={{ marginTop: 6, marginLeft: 30, background: COLORS.cream, borderRadius: 8, padding: 8 }}>
+                <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  <input value={drafts[slot] || ""} onChange={e => setDrafts({ ...drafts, [slot]: e.target.value })} onKeyDown={e => e.key === "Enter" && onQuickAdd(slot)} placeholder="Quick-add a task…" style={{ flex: 1, padding: "6px 8px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5 }} />
+                  <select value={categoryDrafts[slot] || (categories[0] && categories[0].id) || ""} onChange={e => setCategoryDrafts({ ...categoryDrafts, [slot]: e.target.value })} style={{ padding: "6px 6px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12, background: "#fff" }}>
+                    {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                  <button onClick={() => onQuickAdd(slot)} style={{ border: "none", borderRadius: 6, background: COLORS.sage, color: "#fff", padding: "6px 10px", fontSize: 12, cursor: "pointer" }}>Add</button>
+                </div>
+                {tasks.filter(t => t.status === STATUS.ACTIVE && !ids.includes(t.id)).map(t => (
+                  <button key={t.id} onClick={() => setSlot(slot, t.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "5px 8px", border: "none", background: "transparent", fontSize: 12.5, cursor: "pointer" }}>{t.text}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -745,7 +822,7 @@ function StudyHubTasksWidget({ studyHubKey, onConnect, loadState, pending, onImp
             <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${COLORS.lavenderLight}` }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12.5 }}>{item.text}</div>
-                <div style={{ fontSize: 10.5, color: COLORS.sage }}>{item.source}</div>
+                <div style={{ fontSize: 10.5, color: COLORS.sage }}>{item.source}{item.date ? ` · ${item.date}` : ''}</div>
               </div>
               <div style={{ display: "flex", gap: 4 }}>
                 <button onClick={() => onImport(item)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "none", background: COLORS.sage, color: "#fff", cursor: "pointer" }}>Add</button>
@@ -1102,7 +1179,7 @@ function BettermentThemeCard() {
   if (theme === null) return null;
 
   return (
-    <div style={{ marginTop: 14, padding: "14px 16px", borderRadius: 11, background: COLORS.lavenderLight }}>
+    <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}`, marginBottom: 20 }}>
       <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: COLORS.ink, opacity: 0.6, marginBottom: 4 }}>Betterment Theme</div>
       {habits.length === 0 ? (
         <div style={{ fontSize: 12.5, opacity: 0.7, marginBottom: 8 }}>No active theme this month.</div>
@@ -1446,6 +1523,15 @@ export default function RootSystem() {
   // so the fields we want arrive as data["rr-phd-tasks"] and
   // data["rr-phd-checkpoints"] — the same keys Study Hub's own useStore
   // calls were given.
+  //
+  // A syllabus item can now carry its own "sessions" sub-array (added in
+  // Study Hub so a single reading/module can be broken into however many
+  // sittings it actually takes — mirrors checkpoints' existing items/checked
+  // shape exactly). When sessions exist, each not-yet-done session becomes
+  // its own importable task here, same as an unchecked checkpoint sub-item
+  // already does. If a syllabus item has no sessions (or none logged yet),
+  // it falls back to importing as one flat task exactly as before, so older
+  // syllabus items with no sessions keep working unchanged.
   function loadStudyHubTasks(key) {
     if (!key.trim() || studyHubLoadState === "loading") return;
     setStudyHubLoadState("loading");
@@ -1457,11 +1543,25 @@ export default function RootSystem() {
         const checkpoints = data["rr-phd-checkpoints"] || [];
         const items = [];
         syllabus.forEach(t => {
-          if (t.status !== "done") {
+          if (t.status === "done") return;
+          const sessions = Array.isArray(t.sessions) ? t.sessions : [];
+          if (sessions.length > 0) {
+            sessions.forEach(s => {
+              if (!s.done) {
+                items.push({
+                  id: `syllabus-session-${t.id}-${s.id}`,
+                  text: `${t.title} — ${s.label || "Session"}`,
+                  source: t.quarter ? `Syllabus · ${t.quarter}` : "Syllabus",
+                  date: s.date || null,
+                });
+              }
+            });
+          } else {
             items.push({ id: `syllabus-${t.id}`, text: t.title, source: t.quarter ? `Syllabus · ${t.quarter}` : "Syllabus" });
           }
         });
         checkpoints.forEach(cp => {
+          if (cp.done) return; // matches the syllabus behavior above — once the parent is marked done, stop surfacing its remaining sub-items
           (cp.items || []).forEach((text, idx) => {
             const checked = (cp.checked || {})[idx];
             if (!checked) {
@@ -1482,13 +1582,15 @@ export default function RootSystem() {
 
   // Imports one Study Hub item as a real Brain Inbox task, auto-creating a
   // "Dissertation" category on first use if one doesn't already exist.
+  // If the item came from a syllabus session with a date attached in Study
+  // Hub, that date pre-fills scheduledDate here rather than being dropped.
   function importStudyHubTask(item) {
     setCategories(prev => prev.some(c => c.id === "dissertation")
       ? prev
       : [...prev, { id: "dissertation", label: "Dissertation", color: COLORS.sage }]);
     setTasks(ts => [{
       id: uid(), text: item.text, category: "dissertation", status: STATUS.ACTIVE,
-      estMinutes: null, scheduledDate: null, mode: CATEGORY_MODE_DEFAULTS["dissertation"] || null,
+      estMinutes: null, scheduledDate: item.date || null, mode: CATEGORY_MODE_DEFAULTS["dissertation"] || null,
     }, ...ts]);
     setImportedStudyHubIds(prev => [...prev, item.id]);
     setStudyHubPending(prev => prev.filter(p => p.id !== item.id));
@@ -1741,6 +1843,36 @@ export default function RootSystem() {
       : r));
     setEditingRoutineId(null);
   }
+  // Builds the equivalent recurring task from a routine's existing
+  // schedule — same days, same start time, same duration, same cognitive
+  // mode if one was set. The routine itself is left untouched; nothing
+  // here deletes it, since converting is a one-way creation, not a risky
+  // in-place migration. Delete the routine yourself once you're happy
+  // with the task version.
+  function convertRoutineToTask(routine) {
+    const norm = normalizeRoutine(routine);
+    const days = norm.weekdays && norm.weekdays.length ? norm.weekdays : [...WEEK_ORDER];
+    let estMinutes = null;
+    if (norm.startTime && norm.endTime) {
+      const [sh, sm] = norm.startTime.split(":").map(Number);
+      const [eh, em] = norm.endTime.split(":").map(Number);
+      const diff = (eh * 60 + em) - (sh * 60 + sm);
+      if (diff > 0) estMinutes = diff;
+    }
+    const now = new Date();
+    let targetDate = null;
+    for (let i = 0; i < 7; i++) {
+      const candidate = new Date(now);
+      candidate.setDate(now.getDate() + i);
+      const code = WEEK_ORDER[(candidate.getDay() + 6) % 7];
+      if (days.includes(code)) { targetDate = toKey(candidate); break; }
+    }
+    setTasks(ts => [{
+      id: uid(), text: norm.label, category: null, status: STATUS.ACTIVE,
+      estMinutes, scheduledDate: targetDate, scheduleTime: norm.startTime || null,
+      mode: norm.mode || null, recurrence: { type: "weekdays", days },
+    }, ...ts]);
+  }
   function removeRoutine(id) {
     const r = routines.find(x => x.id === id);
     const idx = routines.findIndex(x => x.id === id);
@@ -1928,14 +2060,30 @@ export default function RootSystem() {
     }));
     if (spawnedFrom) {
       const nextDate = nextRecurrenceDate(spawnedFrom.scheduledDate || toKey(new Date()), spawnedFrom.recurrence);
-      setTasks(prev => [{
-        id: uid(), text: spawnedFrom.text, category: spawnedFrom.category, status: STATUS.ACTIVE,
-        estMinutes: spawnedFrom.estMinutes, scheduledDate: nextDate, mode: spawnedFrom.mode, recurrence: spawnedFrom.recurrence,
-      }, ...prev]);
+      // A null date means the recurrence rule itself is incomplete (e.g. a
+      // "specific weekdays" recurrence with no days actually selected) —
+      // spawning a dateless duplicate in that case would be worse than not
+      // spawning at all, since it'd just be an orphaned task with no
+      // schedule and no way to know why it exists.
+      if (nextDate) {
+        setTasks(prev => [{
+          id: uid(), text: spawnedFrom.text, category: spawnedFrom.category, status: STATUS.ACTIVE,
+          estMinutes: spawnedFrom.estMinutes, scheduledDate: nextDate, mode: spawnedFrom.mode, recurrence: spawnedFrom.recurrence,
+        }, ...prev]);
+      }
     }
   }
   function deleteTask(id) {
     setTasks(prev => prev.filter(t => t.id !== id));
+  }
+  // For tasks you do more than once a day — copies everything (category,
+  // mode, recurrence, estimate) except the id and any completion/spawn
+  // history, so the duplicate starts fresh. Scheduled time carries over
+  // too since it's a reasonable starting point, but is the one thing
+  // you'll likely want to change right after duplicating.
+  function duplicateTask(task) {
+    const { id, completedDate, spawnedNext, ...rest } = task;
+    setTasks(prev => [{ ...rest, id: uid(), status: STATUS.ACTIVE }, ...prev]);
   }
   function scheduleTask(id, date) {
     updateTask(id, { scheduledDate: date });
@@ -2212,7 +2360,7 @@ export default function RootSystem() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `tulsi-restore-system-backup-${toKey(new Date())}.json`;
+    a.download = `tulsi-grace-system-backup-${toKey(new Date())}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -2341,8 +2489,21 @@ export default function RootSystem() {
                 void clockTick; // reference intentionally — recomputes this block every minute
                 const now = new Date();
                 const todayCode = WEEK_ORDER[(now.getDay() + 6) % 7];
+                const todayKey2 = toKey(now);
                 const nowMin = now.getHours() * 60 + now.getMinutes();
-                const active = routines.find(r => {
+
+                // Check scheduled, mode-tagged tasks first — this is what a
+                // converted routine (or any recurring study task with a
+                // time) looks like now. Falls back to routines so nothing
+                // that was never converted stops working either.
+                const activeTask = tasks.find(t => {
+                  if (t.status !== STATUS.ACTIVE || !t.mode || !t.scheduleTime || t.scheduledDate !== todayKey2) return false;
+                  const [sh, sm] = t.scheduleTime.split(":").map(Number);
+                  const start = sh * 60 + sm;
+                  const end = start + (t.estMinutes || 30);
+                  return nowMin >= start && nowMin < end;
+                });
+                const activeRoutine = !activeTask && routines.find(r => {
                   if (!r.mode || !r.startTime) return false;
                   const days = Array.isArray(r.weekdays) ? r.weekdays : (r.weekday === "daily" ? WEEK_ORDER : [r.weekday]);
                   if (!days.includes(todayCode)) return false;
@@ -2352,16 +2513,25 @@ export default function RootSystem() {
                   if (r.endTime) { const [eh, em] = r.endTime.split(":").map(Number); end = eh * 60 + em; }
                   return nowMin >= start && nowMin < end;
                 });
+                const active = activeTask
+                  ? { mode: activeTask.mode, label: activeTask.text }
+                  : activeRoutine;
                 if (!active) return null;
                 const modeInfo = COGNITIVE_MODES.find(m => m.id === active.mode);
-                const matches = tasks.filter(t => t.status === STATUS.ACTIVE && t.mode === active.mode).slice(0, 5);
+                const matches = tasks.filter(t => t.status === STATUS.ACTIVE && t.mode === active.mode && t.id !== activeTask?.id).slice(0, 5);
                 return (
                   <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `2px solid ${modeInfo?.color || COLORS.lavender}`, marginBottom: 20 }}>
                     <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: modeInfo?.color || COLORS.sage, fontWeight: 700, marginBottom: 6, textAlign: "center" }}>
                       You're in a {modeInfo?.label || "focused"} block — {active.label}
                     </div>
+                    {activeTask && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", justifyContent: "center" }}>
+                        <input type="checkbox" checked={false} onChange={() => updateTask(activeTask.id, { status: STATUS.COMPLETED })} />
+                        <span style={{ fontSize: 13.5 }}>Mark "{activeTask.text}" done</span>
+                      </div>
+                    )}
                     {matches.length === 0 ? (
-                      <div style={{ fontSize: 12.5, color: COLORS.sage, textAlign: "center" }}>No active tasks tagged for this mode yet.</div>
+                      !activeTask && <div style={{ fontSize: 12.5, color: COLORS.sage, textAlign: "center" }}>No active tasks tagged for this mode yet.</div>
                     ) : (
                       matches.map(t => (
                         <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0" }}>
@@ -2405,46 +2575,18 @@ export default function RootSystem() {
                 )}
             </div>
 
-            <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}`, marginBottom: 20 }}>
-              <BettermentThemeCard />
-            </div>
+            <BettermentThemeCard />
 
             <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginBottom: 20 }}>
                 <div style={{ fontFamily: DISPLAY_FONT, fontSize: 18, textAlign: "center", margin: "0 0 4px" }}>Daily 3</div>
                 <div style={{ fontSize: 12, color: COLORS.sage, marginBottom: 12, textAlign: "center" }}>Your three non-negotiables today</div>
-                {[0, 1, 2].map(slot => {
-                  const assigned = tasks.find(t => t.id === dailyThreeIds[slot]);
-                  return (
-                    <div key={slot} style={{ marginBottom: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontFamily: DISPLAY_FONT, fontSize: 12, color: COLORS.lavender, width: 20 }}>{String(slot + 1).padStart(2, "0")}</span>
-                        {assigned ? (
-                          <>
-                            <span style={{ flex: 1, fontSize: 13, textDecoration: assigned.status === STATUS.COMPLETED ? "line-through" : "none", opacity: assigned.status === STATUS.COMPLETED ? 0.5 : 1 }}>{assigned.text}</span>
-                            <input type="checkbox" checked={assigned.status === STATUS.COMPLETED} onChange={e => updateTask(assigned.id, { status: e.target.checked ? STATUS.COMPLETED : STATUS.ACTIVE })} />
-                            <button onClick={() => setDailyThreeSlot(slot, null)} style={{ border: "none", background: "transparent", color: COLORS.sage, fontSize: 12, cursor: "pointer" }}>&times;</button>
-                          </>
-                        ) : (
-                          <button onClick={() => setDailyThreeEditing(dailyThreeEditing === slot ? null : slot)} style={{ flex: 1, textAlign: "left", padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 13, color: COLORS.sage, cursor: "pointer" }}>Choose or add a task…</button>
-                        )}
-                      </div>
-                      {dailyThreeEditing === slot && !assigned && (
-                        <div style={{ marginTop: 6, marginLeft: 30, background: COLORS.cream, borderRadius: 8, padding: 8 }}>
-                          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                            <input value={dailyThreeDrafts[slot] || ""} onChange={e => setDailyThreeDrafts({ ...dailyThreeDrafts, [slot]: e.target.value })} onKeyDown={e => e.key === "Enter" && commitDailyThreeQuickAdd(slot)} placeholder="Quick-add a task…" style={{ flex: 1, padding: "6px 8px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5 }} />
-                            <select value={dailyThreeCategoryDrafts[slot] || (categories[0] && categories[0].id) || ""} onChange={e => setDailyThreeCategoryDrafts({ ...dailyThreeCategoryDrafts, [slot]: e.target.value })} style={{ padding: "6px 6px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12, background: "#fff" }}>
-                              {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-                            </select>
-                            <button onClick={() => commitDailyThreeQuickAdd(slot)} style={{ border: "none", borderRadius: 6, background: COLORS.sage, color: "#fff", padding: "6px 10px", fontSize: 12, cursor: "pointer" }}>Add</button>
-                          </div>
-                          {tasks.filter(t => t.status === STATUS.ACTIVE && !dailyThreeIds.includes(t.id)).map(t => (
-                            <button key={t.id} onClick={() => setDailyThreeSlot(slot, t.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "5px 8px", border: "none", background: "transparent", fontSize: 12.5, cursor: "pointer" }}>{t.text}</button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                <DailyThreeSlots
+                  ids={dailyThreeIds} setSlot={setDailyThreeSlot} tasks={tasks} categories={categories}
+                  editingSlot={dailyThreeEditing} setEditingSlot={setDailyThreeEditing}
+                  drafts={dailyThreeDrafts} setDrafts={setDailyThreeDrafts}
+                  categoryDrafts={dailyThreeCategoryDrafts} setCategoryDrafts={setDailyThreeCategoryDrafts}
+                  onQuickAdd={commitDailyThreeQuickAdd} updateTask={updateTask}
+                />
               </div>
 
             <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, marginBottom: 20 }}>
@@ -2662,7 +2804,7 @@ export default function RootSystem() {
               </div>
             </div>
 
-            <RecurringTasksManager tasks={tasks} categories={categories} updateTask={updateTask} deleteTask={deleteTask} addRecurringTask={addRecurringTask} />
+            <RecurringTasksManager tasks={tasks} categories={categories} updateTask={updateTask} deleteTask={deleteTask} addRecurringTask={addRecurringTask} duplicateTask={duplicateTask} />
 
             {(() => {
               const statusesToShow =
@@ -2761,12 +2903,12 @@ export default function RootSystem() {
                                 {COGNITIVE_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                               </select>
                             </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                               <span style={{ fontSize: 11, color: COLORS.sage, fontWeight: 600 }}>REPEATS</span>
                               <select
                                 style={{ ...inputStyle, padding: "6px 8px", fontSize: 12.5 }}
                                 value={t.recurrence?.type || ""}
-                                onChange={e => updateTask(t.id, { recurrence: e.target.value ? { type: e.target.value, everyNDays: t.recurrence?.everyNDays || 3 } : null })}
+                                onChange={e => updateTask(t.id, { recurrence: e.target.value ? { type: e.target.value, everyNDays: t.recurrence?.everyNDays || 3, days: t.recurrence?.days || ["MO", "TU", "WE", "TH", "FR"] } : null })}
                               >
                                 <option value="">Never</option>
                                 {RECURRENCE_OPTIONS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
@@ -2774,7 +2916,21 @@ export default function RootSystem() {
                               {t.recurrence?.type === "custom" && (
                                 <input type="number" min="1" style={{ ...inputStyle, width: 56, padding: "6px 8px", fontSize: 12.5 }}
                                   value={t.recurrence.everyNDays || 3}
-                                  onChange={e => updateTask(t.id, { recurrence: { type: "custom", everyNDays: Math.max(1, Number(e.target.value) || 1) } })} />
+                                  onChange={e => updateTask(t.id, { recurrence: { ...t.recurrence, everyNDays: Math.max(1, Number(e.target.value) || 1) } })} />
+                              )}
+                              {t.recurrence?.type === "weekdays" && (
+                                <div style={{ display: "flex", gap: 3 }}>
+                                  {WEEK_ORDER.map(code => {
+                                    const active = (t.recurrence.days || []).includes(code);
+                                    return (
+                                      <button key={code} onClick={() => {
+                                        const days = t.recurrence.days || [];
+                                        const next = active ? days.filter(d => d !== code) : [...days, code];
+                                        updateTask(t.id, { recurrence: { ...t.recurrence, days: next } });
+                                      }} style={{ width: 26, height: 26, borderRadius: "50%", border: `1px solid ${active ? COLORS.sage : COLORS.lavenderLight}`, background: active ? COLORS.sage : "#fff", color: active ? "#fff" : COLORS.ink, fontSize: 10, cursor: "pointer" }}>{code[0]}</button>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </div>
                             {statusKey === STATUS.ACTIVE && (
@@ -3065,6 +3221,7 @@ export default function RootSystem() {
                                   </div>
                                 </div>
                                 <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                                  <button onClick={() => { convertRoutineToTask(r); alert(`"${r.label}" was added to Task Lists as a recurring task. The routine itself is unchanged — delete it yourself once you're happy with the task version.`); }} title="Convert to recurring task" style={{ background: "none", border: "none", color: COLORS.sage, cursor: "pointer", fontSize: 13 }}>↻+</button>
                                   <button onClick={() => startEditRoutine(r)} title="Edit" style={{ background: "none", border: "none", color: COLORS.sage, cursor: "pointer", fontSize: 12 }}>✎</button>
                                   <button onClick={() => removeRoutine(r.id)} title="Delete" style={{ background: "none", border: "none", color: COLORS.sage, cursor: "pointer" }}>✕</button>
                                 </div>
