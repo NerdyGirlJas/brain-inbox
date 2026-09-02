@@ -76,6 +76,69 @@ function nextRecurrenceDate(fromDateKey, recurrence) {
   return toKey(date);
 }
 
+const RECUR_HORIZON_DAYS = 21; // how far ahead recurring tasks get pre-populated on the calendar
+
+// Recurring tasks used to only exist one occurrence at a time — the next
+// one was created only after you completed the current one. That meant a
+// freshly-created "Mon/Wed/Fri" task showed on the calendar for its first
+// day only, with nothing for the following weeks until you'd worked
+// through them one by one. This proactively fills a rolling window of
+// future occurrences instead, so the schedule looks "ongoing" the moment
+// you create it.
+//
+// Tasks are grouped by seriesId (falling back to a task's own id for
+// tasks created before seriesId existed, so old recurring tasks still
+// group correctly with their own past/future spawns). For each series,
+// the most recent occurrence acts as the template for what to keep
+// copying forward — including which time-of-day slot(s) are currently in
+// use, so a series with two same-day time slots (e.g. 8am and 11am,
+// added via "add another time") keeps generating both going forward
+// rather than collapsing back to one.
+function topUpRecurringSeries(currentTasks) {
+  const bySeries = {};
+  currentTasks.forEach(t => {
+    if (!t.recurrence || t.status === STATUS.ARCHIVED) return;
+    const sid = t.seriesId || t.id;
+    (bySeries[sid] = bySeries[sid] || []).push(t);
+  });
+
+  const horizonKey = toKey(new Date(Date.now() + RECUR_HORIZON_DAYS * 86400000));
+  const additions = [];
+
+  Object.entries(bySeries).forEach(([sid, instances]) => {
+    const withDates = instances.filter(t => t.scheduledDate);
+    if (withDates.length === 0) return;
+    const latestDate = withDates.reduce((max, t) => (t.scheduledDate > max ? t.scheduledDate : max), withDates[0].scheduledDate);
+    const latestInstances = withDates.filter(t => t.scheduledDate === latestDate);
+    const template = latestInstances[0];
+    const timeSlots = [...new Set(latestInstances.map(t => t.scheduleTime || null))];
+
+    const existingKeys = new Set(instances.map(t => `${t.scheduledDate}|${t.scheduleTime || ""}`));
+
+    let cursor = latestDate;
+    let iterations = 0;
+    while (iterations < 60) {
+      iterations++;
+      const nextDate = nextRecurrenceDate(cursor, template.recurrence);
+      if (!nextDate || nextDate > horizonKey) break;
+      cursor = nextDate;
+      timeSlots.forEach(time => {
+        const key = `${nextDate}|${time || ""}`;
+        if (!existingKeys.has(key)) {
+          existingKeys.add(key);
+          additions.push({
+            id: uid(), text: template.text, category: template.category, status: STATUS.ACTIVE,
+            estMinutes: template.estMinutes, scheduledDate: nextDate, scheduleTime: time || null,
+            mode: template.mode, recurrence: template.recurrence, seriesId: sid,
+          });
+        }
+      });
+    }
+  });
+
+  return additions;
+}
+
 const COGNITIVE_MODES = [
   { id: "generative", label: "Generative", color: "#c4986a" },
   { id: "analytical", label: "Analytical / Planning", color: COLORS.azure },
@@ -537,8 +600,9 @@ function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addR
                       </span>
                     </div>
                     <div style={{ display: "flex", gap: 10 }}>
-                      <button onClick={() => duplicateTask(t)} style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Duplicate</button>
-                      <button onClick={() => updateTask(t.id, { recurrence: null })} style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Stop repeating</button>
+                      <button onClick={() => addTimeSlot(t)} title="Add another time today, same recurring series" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>+ Add another time</button>
+                      <button onClick={() => duplicateTask(t)} title="Independent copy, its own separate series" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Duplicate</button>
+                      <button onClick={() => stopRepeatingSeries(t)} title="Stops this series — also removes any already-generated future occurrences" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Stop repeating</button>
                       <button onClick={() => { if (window.confirm(`Delete "${t.text}" entirely? This removes the task itself, not just its recurrence.`)) deleteTask(t.id); }} style={{ fontSize: 11.5, color: "#a0524a", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Delete</button>
                     </div>
                   </div>
@@ -1179,27 +1243,29 @@ function BettermentThemeCard() {
   if (theme === null) return null;
 
   return (
-    <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}`, marginBottom: 20 }}>
-      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: COLORS.ink, opacity: 0.6, marginBottom: 4 }}>Betterment Theme</div>
-      {habits.length === 0 ? (
-        <div style={{ fontSize: 12.5, opacity: 0.7, marginBottom: 8 }}>No active theme this month.</div>
-      ) : (
-        habits.map(h => (
-          <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
-            <input type="checkbox" checked={h.doneToday} onChange={() => toggleHabit(h.id)} />
-            <span style={{ fontSize: 13.5, textDecoration: h.doneToday ? "line-through" : "none", opacity: h.doneToday ? 0.6 : 1 }}>{h.name}</span>
-          </div>
-        ))
-      )}
-      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <input type="text" value={evidenceDraft} onChange={e => setEvidenceDraft(e.target.value)} placeholder="Notice something? Add it here"
-          onKeyDown={e => e.key === "Enter" && addEvidence()}
-          style={{ flex: 1, padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavender}`, fontSize: 13, boxSizing: "border-box" }} />
-        <button onClick={addEvidence} style={{ padding: "7px 12px", borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", fontSize: 13 }}>Add</button>
+    <div style={{ background: COLORS.white, borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}`, marginBottom: 20 }}>
+      <div style={{ background: COLORS.lavenderLight, borderRadius: 10, padding: 14 }}>
+        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: COLORS.ink, opacity: 0.6, marginBottom: 4 }}>Betterment Theme</div>
+        {habits.length === 0 ? (
+          <div style={{ fontSize: 12.5, opacity: 0.7, marginBottom: 8 }}>No active theme this month.</div>
+        ) : (
+          habits.map(h => (
+            <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
+              <input type="checkbox" checked={h.doneToday} onChange={() => toggleHabit(h.id)} />
+              <span style={{ fontSize: 13.5, textDecoration: h.doneToday ? "line-through" : "none", opacity: h.doneToday ? 0.6 : 1 }}>{h.name}</span>
+            </div>
+          ))
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <input type="text" value={evidenceDraft} onChange={e => setEvidenceDraft(e.target.value)} placeholder="Notice something? Add it here"
+            onKeyDown={e => e.key === "Enter" && addEvidence()}
+            style={{ flex: 1, padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavender}`, fontSize: 13, boxSizing: "border-box" }} />
+          <button onClick={addEvidence} style={{ padding: "7px 12px", borderRadius: 8, border: "none", background: COLORS.sage, color: "#fff", fontSize: 13 }}>Add</button>
+        </div>
+        <a href="https://rr-foundations-tracker.netlify.app/betterment-theme.html" target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 10, fontSize: 13, color: COLORS.ink, fontFamily: DISPLAY_FONT, textDecoration: "none" }}>
+          Open this month's theme &rarr;
+        </a>
       </div>
-      <a href="https://rr-foundations-tracker.netlify.app/betterment-theme.html" target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 10, fontSize: 13, color: COLORS.ink, fontFamily: DISPLAY_FONT, textDecoration: "none" }}>
-        Open this month's theme &rarr;
-      </a>
     </div>
   );
 }
@@ -1457,7 +1523,7 @@ export default function RootSystem() {
     setQuickTaskDraft("");
   }
   function addRecurringTask({ text, category, mode, recurrence }) {
-    setTasks(ts => [{ id: uid(), text, category, status: STATUS.ACTIVE, estMinutes: null, scheduledDate: toKey(new Date()), mode, recurrence }, ...ts]);
+    setTasks(ts => [{ id: uid(), text, category, status: STATUS.ACTIVE, estMinutes: null, scheduledDate: toKey(new Date()), mode, recurrence, seriesId: uid() }, ...ts]);
   }
 
 
@@ -1870,7 +1936,7 @@ export default function RootSystem() {
     setTasks(ts => [{
       id: uid(), text: norm.label, category: null, status: STATUS.ACTIVE,
       estMinutes, scheduledDate: targetDate, scheduleTime: norm.startTime || null,
-      mode: norm.mode || null, recurrence: { type: "weekdays", days },
+      mode: norm.mode || null, recurrence: { type: "weekdays", days }, seriesId: uid(),
     }, ...ts]);
   }
   function removeRoutine(id) {
@@ -1957,6 +2023,18 @@ export default function RootSystem() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  /* ---------- recurring tasks: keep a rolling window of future occurrences filled in ---------- */
+  // Runs whenever tasks changes; it's self-limiting rather than needing a
+  // specific trigger point for every place a recurring task could be
+  // created or edited — topUpRecurringSeries returns nothing once the
+  // horizon is already filled, so this naturally settles after one extra
+  // pass instead of looping.
+  useEffect(() => {
+    if (!isLoaded) return;
+    const additions = topUpRecurringSeries(tasks);
+    if (additions.length > 0) setTasks(prev => [...prev, ...additions]);
+  }, [isLoaded, tasks]);
 
   /* ---------- persistence: debounced save on change ---------- */
   useEffect(() => {
@@ -2069,6 +2147,7 @@ export default function RootSystem() {
         setTasks(prev => [{
           id: uid(), text: spawnedFrom.text, category: spawnedFrom.category, status: STATUS.ACTIVE,
           estMinutes: spawnedFrom.estMinutes, scheduledDate: nextDate, mode: spawnedFrom.mode, recurrence: spawnedFrom.recurrence,
+          seriesId: spawnedFrom.seriesId || spawnedFrom.id, scheduleTime: spawnedFrom.scheduleTime || null,
         }, ...prev]);
       }
     }
@@ -2080,10 +2159,86 @@ export default function RootSystem() {
   // mode, recurrence, estimate) except the id and any completion/spawn
   // history, so the duplicate starts fresh. Scheduled time carries over
   // too since it's a reasonable starting point, but is the one thing
-  // you'll likely want to change right after duplicating.
+  // you'll likely want to change right after duplicating. This is an
+  // INDEPENDENT copy — it gets its own fresh seriesId, so editing or
+  // deleting one doesn't touch the other's recurring schedule.
   function duplicateTask(task) {
-    const { id, completedDate, spawnedNext, ...rest } = task;
-    setTasks(prev => [{ ...rest, id: uid(), status: STATUS.ACTIVE }, ...prev]);
+    const { id, completedDate, spawnedNext, seriesId, ...rest } = task;
+    setTasks(prev => [{ ...rest, id: uid(), status: STATUS.ACTIVE, seriesId: task.recurrence ? uid() : undefined }, ...prev]);
+  }
+  // For a recurring task that happens more than once on the SAME day (e.g.
+  // Reading & Writing at both 8am and 11am) — unlike Duplicate, this stays
+  // part of the SAME recurring series (shares seriesId), so the rolling
+  // top-up keeps generating both times going forward automatically instead
+  // of you having to duplicate it again every time the series regenerates.
+  function addTimeSlot(task) {
+    const sid = task.seriesId || task.id;
+    setTasks(prev => [{
+      ...task, id: uid(), seriesId: sid, scheduleTime: null,
+      completedDate: undefined, spawnedNext: false, status: STATUS.ACTIVE,
+    }, ...prev]);
+  }
+  // Stopping repeating now has to do more than it used to: since the
+  // rolling top-up pre-generates many future occurrences at once, clearing
+  // recurrence on only the ONE instance you clicked would leave every
+  // other already-generated future occurrence still holding its own
+  // recurrence field — and the next top-up pass would just pick one of
+  // those and keep extending the series anyway, silently undoing the
+  // "stop." This clears the clicked instance's recurrence (leaving it as
+  // a normal one-off task on its own date) and removes every OTHER
+  // not-yet-completed instance in the same series. Completed instances
+  // are left alone since they're a real historical record, not part of
+  // what's being stopped.
+  function stopRepeatingSeries(task) {
+    const sid = task.seriesId || task.id;
+    setTasks(prev => prev
+      .filter(t => t.id === task.id || t.seriesId !== sid || (t.seriesId === sid && t.status === STATUS.COMPLETED))
+      .map(t => t.id === task.id ? { ...t, recurrence: null } : t));
+  }
+  // Applies a field change to a task's whole future schedule instead of
+  // just the one instance clicked — "this and future" rather than a
+  // one-off edit. Only touches instances sharing the same seriesId that
+  // are dated on or after the clicked instance (or undated, since there's
+  // no "past" to protect there); completed instances are always left
+  // alone, since they're a historical record of what actually happened,
+  // not part of what's being edited going forward.
+  //
+  // A `recurrence` change is handled differently on purpose: relabeling
+  // an already-generated future date with a new recurrence rule would
+  // leave that instance's date out of step with the rule it now claims to
+  // follow (e.g. a Monday-only instance suddenly claiming to be daily).
+  // Instead, not-yet-completed future instances are deleted here, and the
+  // existing rolling top-up (which already runs on every task change)
+  // regenerates the correct dates under the new rule starting from the
+  // edited instance — reusing already-tested logic rather than
+  // duplicating date math here.
+  function updateSeriesForward(task, patch) {
+    const sid = task.seriesId || task.id;
+    const isPast = (t) => t.scheduledDate && task.scheduledDate && t.scheduledDate < task.scheduledDate;
+    const inSeries = (t) => t.id === task.id || t.seriesId === sid;
+
+    if ('recurrence' in patch) {
+      setTasks(prev => prev
+        .filter(t => !inSeries(t) || t.id === task.id || t.status === STATUS.COMPLETED || isPast(t))
+        .map(t => t.id === task.id ? { ...t, ...patch } : t));
+      return;
+    }
+    setTasks(prev => prev.map(t => {
+      if (!inSeries(t)) return t;
+      if (t.status === STATUS.COMPLETED || isPast(t)) return t;
+      return { ...t, ...patch };
+    }));
+  }
+  // Recurring-task field edits ask which scope you mean, the way most
+  // calendar apps do — Cancel applies to just this occurrence (the old,
+  // original behavior), OK extends the change to this and every future
+  // occurrence in the series. Non-recurring tasks skip the question
+  // entirely, since there's no series to extend to.
+  function applyToSeriesOrSingle(task, patch) {
+    if (!task.recurrence) { updateTask(task.id, patch); return; }
+    const propagate = window.confirm("Apply this change to this and all future occurrences?\n\nOK = this and future occurrences\nCancel = just this one occurrence");
+    if (propagate) updateSeriesForward(task, patch);
+    else updateTask(task.id, patch);
   }
   function scheduleTask(id, date) {
     updateTask(id, { scheduledDate: date });
@@ -2889,7 +3044,7 @@ export default function RootSystem() {
                                 type="number" placeholder="—"
                                 style={{ ...inputStyle, width: 70, padding: "6px 8px" }}
                                 value={t.estMinutes ?? ""}
-                                onChange={e => updateTask(t.id, { estMinutes: e.target.value ? Number(e.target.value) : null })}
+                                onChange={e => applyToSeriesOrSingle(t, { estMinutes: e.target.value ? Number(e.target.value) : null })}
                               />
                             </div>
                             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2897,7 +3052,7 @@ export default function RootSystem() {
                               <select
                                 style={{ ...inputStyle, padding: "6px 8px", fontSize: 12.5 }}
                                 value={t.mode || ""}
-                                onChange={e => updateTask(t.id, { mode: e.target.value || null })}
+                                onChange={e => applyToSeriesOrSingle(t, { mode: e.target.value || null })}
                               >
                                 <option value="">—</option>
                                 {COGNITIVE_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
@@ -2908,7 +3063,10 @@ export default function RootSystem() {
                               <select
                                 style={{ ...inputStyle, padding: "6px 8px", fontSize: 12.5 }}
                                 value={t.recurrence?.type || ""}
-                                onChange={e => updateTask(t.id, { recurrence: e.target.value ? { type: e.target.value, everyNDays: t.recurrence?.everyNDays || 3, days: t.recurrence?.days || ["MO", "TU", "WE", "TH", "FR"] } : null })}
+                                onChange={e => {
+                                  if (!e.target.value) { stopRepeatingSeries(t); return; }
+                                  applyToSeriesOrSingle(t, { recurrence: { type: e.target.value, everyNDays: t.recurrence?.everyNDays || 3, days: t.recurrence?.days || ["MO", "TU", "WE", "TH", "FR"] } });
+                                }}
                               >
                                 <option value="">Never</option>
                                 {RECURRENCE_OPTIONS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
@@ -2916,7 +3074,7 @@ export default function RootSystem() {
                               {t.recurrence?.type === "custom" && (
                                 <input type="number" min="1" style={{ ...inputStyle, width: 56, padding: "6px 8px", fontSize: 12.5 }}
                                   value={t.recurrence.everyNDays || 3}
-                                  onChange={e => updateTask(t.id, { recurrence: { ...t.recurrence, everyNDays: Math.max(1, Number(e.target.value) || 1) } })} />
+                                  onChange={e => applyToSeriesOrSingle(t, { recurrence: { ...t.recurrence, everyNDays: Math.max(1, Number(e.target.value) || 1) } })} />
                               )}
                               {t.recurrence?.type === "weekdays" && (
                                 <div style={{ display: "flex", gap: 3 }}>
@@ -2926,7 +3084,7 @@ export default function RootSystem() {
                                       <button key={code} onClick={() => {
                                         const days = t.recurrence.days || [];
                                         const next = active ? days.filter(d => d !== code) : [...days, code];
-                                        updateTask(t.id, { recurrence: { ...t.recurrence, days: next } });
+                                        applyToSeriesOrSingle(t, { recurrence: { ...t.recurrence, days: next } });
                                       }} style={{ width: 26, height: 26, borderRadius: "50%", border: `1px solid ${active ? COLORS.sage : COLORS.lavenderLight}`, background: active ? COLORS.sage : "#fff", color: active ? "#fff" : COLORS.ink, fontSize: 10, cursor: "pointer" }}>{code[0]}</button>
                                     );
                                   })}
@@ -2945,7 +3103,7 @@ export default function RootSystem() {
                                   <input
                                     type="time" title="Optional time \u2014 shows this task on the hour grid" style={{ ...inputStyle, width: 110, padding: "6px 8px" }}
                                     value={t.scheduleTime || ""}
-                                    onChange={e => scheduleTaskTime(t.id, e.target.value)}
+                                    onChange={e => applyToSeriesOrSingle(t, { scheduleTime: e.target.value || null })}
                                   />
                                 )}
                               </div>
