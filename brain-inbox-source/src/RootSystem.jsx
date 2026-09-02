@@ -76,7 +76,7 @@ function nextRecurrenceDate(fromDateKey, recurrence) {
   return toKey(date);
 }
 
-const RECUR_HORIZON_DAYS = 21; // how far ahead recurring tasks get pre-populated on the calendar
+const RECUR_HORIZON_DAYS = 7; // how far ahead recurring tasks get pre-populated on the calendar
 
 // Recurring tasks used to only exist one occurrence at a time — the next
 // one was created only after you completed the current one. That meant a
@@ -513,12 +513,33 @@ function pickTaskForMe(tasks, mode) {
   return pool[pool.length - 1];
 }
 
-function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addRecurringTask, duplicateTask }) {
+function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addRecurringTask, duplicateTask, addTimeSlot, stopRepeatingSeries, onPruneExcess, onDeleteSeries }) {
   const [collapsed, setCollapsed] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [draft, setDraft] = useState({ text: "", category: categories[0]?.id || "", mode: "", recurrenceType: "weekly", everyNDays: 3, days: ["MO", "TU", "WE", "TH", "FR"] });
 
   const recurringTasks = tasks.filter(t => t.recurrence && (t.status === STATUS.ACTIVE || t.status === STATUS.SOMEDAY));
+
+  // Grouped by series so a Mon–Fri task shows as ONE row with "5 upcoming"
+  // rather than five separate-looking rows — this is the direct fix for
+  // the over-generation incident making the list look duplicated. Actions
+  // (add another time, duplicate, stop repeating) act on the soonest
+  // not-yet-completed instance, which is a reasonable representative for
+  // the whole series.
+  const seriesGroups = useMemo(() => {
+    const bySeries = {};
+    recurringTasks.forEach(t => {
+      const sid = t.seriesId || t.id;
+      (bySeries[sid] = bySeries[sid] || []).push(t);
+    });
+    return Object.entries(bySeries).map(([sid, instances]) => {
+      const sorted = [...instances].sort((a, b) => (a.scheduledDate || "").localeCompare(b.scheduledDate || ""));
+      return { sid, representative: sorted[0], count: sorted.length, nextDate: sorted[0]?.scheduledDate || null };
+    });
+  }, [recurringTasks]);
+
+  const horizonKey = toKey(new Date(Date.now() + RECUR_HORIZON_DAYS * 86400000));
+  const excessCount = recurringTasks.filter(t => t.scheduledDate && t.scheduledDate > horizonKey).length;
 
   function commitAdd() {
     if (!draft.text.trim()) return;
@@ -536,12 +557,22 @@ function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addR
 
   return (
     <div style={{ ...cardStyle, marginBottom: 18 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <button onClick={() => setCollapsed(c => !c)} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: DISPLAY_FONT, fontSize: 18, color: COLORS.ink }}>
           <span style={{ display: "inline-block", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s", fontSize: 14 }}>▾</span>
-          Recurring Tasks {recurringTasks.length > 0 && `(${recurringTasks.length})`}
+          Recurring Tasks {seriesGroups.length > 0 && `(${seriesGroups.length} series, ${recurringTasks.length} scheduled)`}
         </button>
-        {!collapsed && <button onClick={() => setShowAdd(s => !s)} style={{ fontSize: 12.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer" }}>{showAdd ? "Cancel" : "+ New recurring task"}</button>}
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {excessCount > 0 && (
+            <button
+              onClick={() => { if (window.confirm(`This removes ${excessCount} already-generated occurrence(s) scheduled more than a week out, leaving the next upcoming occurrence per series in place. Anything already completed is left untouched. Continue?`)) onPruneExcess(); }}
+              style={{ fontSize: 12, color: "#a0524a", background: "none", border: `1px solid #a0524a`, borderRadius: 8, padding: "4px 10px", cursor: "pointer" }}
+            >
+              Clean up {excessCount} over-scheduled
+            </button>
+          )}
+          {!collapsed && <button onClick={() => setShowAdd(s => !s)} style={{ fontSize: 12.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer" }}>{showAdd ? "Cancel" : "+ New recurring task"}</button>}
+        </div>
       </div>
 
       {!collapsed && (
@@ -579,11 +610,11 @@ function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addR
             </div>
           )}
 
-          {recurringTasks.length === 0 ? (
+          {seriesGroups.length === 0 ? (
             <div style={{ fontSize: 13, color: COLORS.sage, textAlign: "center", padding: 10 }}>No recurring tasks yet.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {recurringTasks.map(t => {
+              {seriesGroups.map(({ sid, representative: t, count, nextDate }) => {
                 const cat = t.category ? categories.find(c => c.id === t.category) : null;
                 const rec = RECURRENCE_OPTIONS.find(r => r.id === t.recurrence.type);
                 const modeInfo = t.mode ? COGNITIVE_MODES.find(m => m.id === t.mode) : null;
@@ -591,19 +622,20 @@ function RecurringTasksManager({ tasks, categories, updateTask, deleteTask, addR
                   : t.recurrence.type === "weekdays" ? `weekly on ${(t.recurrence.days || []).map(d => d[0]).join("")}`
                   : rec?.label.toLowerCase();
                 return (
-                  <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: COLORS.cream, borderRadius: 8, flexWrap: "wrap", gap: 8 }}>
+                  <div key={sid} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: COLORS.cream, borderRadius: 8, flexWrap: "wrap", gap: 8 }}>
                     <div>
                       <span style={{ fontSize: 13.5 }}>{t.text}</span>
                       <span style={{ fontSize: 11.5, color: COLORS.sage, marginLeft: 8 }}>
                         ↻ {recurrenceLabel}{t.scheduleTime ? ` · ${t.scheduleTime}` : ""}
                         {cat && ` · ${cat.label}`}{modeInfo && ` · ${modeInfo.label}`}
+                        {nextDate && ` · next ${nextDate}`}{count > 1 && ` · ${count} upcoming`}
                       </span>
                     </div>
                     <div style={{ display: "flex", gap: 10 }}>
                       <button onClick={() => addTimeSlot(t)} title="Add another time today, same recurring series" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>+ Add another time</button>
                       <button onClick={() => duplicateTask(t)} title="Independent copy, its own separate series" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Duplicate</button>
                       <button onClick={() => stopRepeatingSeries(t)} title="Stops this series — also removes any already-generated future occurrences" style={{ fontSize: 11.5, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Stop repeating</button>
-                      <button onClick={() => { if (window.confirm(`Delete "${t.text}" entirely? This removes the task itself, not just its recurrence.`)) deleteTask(t.id); }} style={{ fontSize: 11.5, color: "#a0524a", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Delete</button>
+                      <button onClick={() => { if (window.confirm(`Delete "${t.text}" entirely? This removes all ${count} upcoming occurrence${count === 1 ? "" : "s"} of this recurring task, not just one. Anything already completed is kept as history.`)) onDeleteSeries(sid); }} style={{ fontSize: 11.5, color: "#a0524a", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Delete</button>
                     </div>
                   </div>
                 );
@@ -2189,6 +2221,40 @@ export default function RootSystem() {
   // not-yet-completed instance in the same series. Completed instances
   // are left alone since they're a real historical record, not part of
   // what's being stopped.
+  // One-time (and re-runnable) cleanup for the over-generation incident:
+  // removes not-yet-completed recurring instances scheduled further out
+  // than the current horizon, leaving completed/archived history and
+  // anything within the window untouched. Safe to run repeatedly — once
+  // nothing is beyond the horizon, it's a no-op.
+  function pruneExcessRecurringOccurrences() {
+    const horizonKey = toKey(new Date(Date.now() + RECUR_HORIZON_DAYS * 86400000));
+    // Guard against fully orphaning a series: if every one of its instances
+    // happens to sit beyond the horizon (e.g. one was manually rescheduled
+    // far out), still keep its single earliest instance so the series has
+    // something left to exist as and for top-up to extend from — losing a
+    // series entirely would be a worse outcome than leaving one extra row.
+    const earliestBySeries = {};
+    tasks.forEach(t => {
+      if (!t.recurrence || t.status === STATUS.COMPLETED || t.status === STATUS.ARCHIVED || !t.scheduledDate) return;
+      const sid = t.seriesId || t.id;
+      if (!earliestBySeries[sid] || t.scheduledDate < earliestBySeries[sid]) earliestBySeries[sid] = t.scheduledDate;
+    });
+    setTasks(prev => prev.filter(t => {
+      if (!t.recurrence) return true;
+      if (t.status === STATUS.COMPLETED || t.status === STATUS.ARCHIVED) return true;
+      if (!t.scheduledDate) return true;
+      if (t.scheduledDate <= horizonKey) return true;
+      const sid = t.seriesId || t.id;
+      return t.scheduledDate === earliestBySeries[sid];
+    }));
+  }
+  // Deletes an entire recurring series at once (all not-yet-completed
+  // instances sharing a seriesId) — for the collapsed, one-row-per-series
+  // view, where "Delete" now means the whole series rather than a single
+  // occurrence. Completed instances are kept as history.
+  function deleteRecurringSeries(sid) {
+    setTasks(prev => prev.filter(t => (t.seriesId || t.id) !== sid || t.status === STATUS.COMPLETED));
+  }
   function stopRepeatingSeries(task) {
     const sid = task.seriesId || task.id;
     setTasks(prev => prev
@@ -2959,7 +3025,7 @@ export default function RootSystem() {
               </div>
             </div>
 
-            <RecurringTasksManager tasks={tasks} categories={categories} updateTask={updateTask} deleteTask={deleteTask} addRecurringTask={addRecurringTask} duplicateTask={duplicateTask} />
+            <RecurringTasksManager tasks={tasks} categories={categories} updateTask={updateTask} deleteTask={deleteTask} addRecurringTask={addRecurringTask} duplicateTask={duplicateTask} addTimeSlot={addTimeSlot} stopRepeatingSeries={stopRepeatingSeries} onPruneExcess={pruneExcessRecurringOccurrences} onDeleteSeries={deleteRecurringSeries} />
 
             {(() => {
               const statusesToShow =
