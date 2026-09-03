@@ -35,6 +35,7 @@ const DEFAULT_CATEGORIES = [
   { id: "family", label: "Family", color: COLORS.sage },
   { id: "health", label: "Personal Health", color: "#a8677a" },
   { id: "learning", label: "Personal Learning", color: "#7a8f5c" },
+  { id: "daily-living", label: "Daily Living", color: "#c98a3e" },
 ];
 // A rotating palette for new custom categories so each one gets a distinct color automatically
 const NEW_CATEGORY_COLORS = ["#c98a3e", "#4f7a6b", "#9c5b8f", "#6b7fae", "#b3562f", "#5c8a3e"];
@@ -164,6 +165,27 @@ const uid = () => `id-${uidCounter++}-${Math.random().toString(36).slice(2,7)}`;
 
 function pad(n) { return n.toString().padStart(2, "0"); }
 function toKey(d) { return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+
+// Where a logged entry sits on a clock: exact when the entry has a real
+// clockTime (typed start time, or a future addition), otherwise inferred
+// as "ended when it was logged, so it must have started `minutes` earlier."
+// That inferred version is a real time, just not a guaranteed-precise one —
+// callers that display it should mark it as approximate.
+function entryDisplayTime(entry) {
+  if (entry.clockTime) return { time: entry.clockTime, approximate: false };
+  if (entry.loggedAt) {
+    const started = new Date(new Date(entry.loggedAt).getTime() - (Number(entry.minutes) || 0) * 60000);
+    return { time: `${pad(started.getHours())}:${pad(started.getMinutes())}`, approximate: true };
+  }
+  return { time: null, approximate: true };
+}
+
+function mondayKeyOf(date) {
+  const d = new Date(date);
+  const day = (d.getDay() + 6) % 7; // 0 = Monday
+  d.setDate(d.getDate() - day);
+  return toKey(d);
+}
 
 function getMonthGrid(year, month) {
   const firstOfMonth = new Date(year, month, 1);
@@ -397,7 +419,7 @@ function ClockFace({ pct }) {
 const FOCUS_DURATIONS = [10, 20, 25, 45];
 const FEELING_OPTIONS = ["Focused", "Scattered", "Draining", "Easy"];
 
-function FocusTimer({ tasks, onSessionComplete, onLogTime }) {
+function FocusTimer({ tasks, categories, onSessionComplete, onLogTime }) {
   const [taskId, setTaskId] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
   const [duration, setDuration] = useState(20);
@@ -405,7 +427,7 @@ function FocusTimer({ tasks, onSessionComplete, onLogTime }) {
   const [secondsLeft, setSecondsLeft] = useState(20 * 60);
   const [running, setRunning] = useState(false);
   const [justCompleted, setJustCompleted] = useState(false);
-  const [logPrompt, setLogPrompt] = useState(null); // { minutes, feeling } while the capture prompt is open, else null
+  const [logPrompt, setLogPrompt] = useState(null); // { minutes, feeling, category } while the capture prompt is open, else null
   const intervalRef = useRef(null);
   const task = tasks.find(t => t.id === taskId) || null;
 
@@ -424,7 +446,7 @@ function FocusTimer({ tasks, onSessionComplete, onLogTime }) {
             setRunning(false);
             setJustCompleted(true);
             onSessionComplete(task);
-            setLogPrompt({ minutes: Math.round(totalSecondsRef.current / 60), feeling: "" });
+            setLogPrompt({ minutes: Math.round(totalSecondsRef.current / 60), feeling: "", category: task?.category || "" });
             return 0;
           }
           return s - 1;
@@ -462,15 +484,15 @@ function FocusTimer({ tasks, onSessionComplete, onLogTime }) {
     clearInterval(intervalRef.current);
     setRunning(false);
     const elapsedMinutes = Math.max(1, Math.round((totalSeconds - secondsLeft) / 60));
-    setLogPrompt({ minutes: elapsedMinutes, feeling: "" });
+    setLogPrompt({ minutes: elapsedMinutes, feeling: "", category: task?.category || "" });
   }
 
   function submitLog() {
-    if (!logPrompt) return;
+    if (!logPrompt || !logPrompt.category) return;
     onLogTime({
       taskId: task?.id || null, text: task?.text || "Focus session",
       minutes: Number(logPrompt.minutes) || 0, feeling: logPrompt.feeling || null,
-      category: task?.category || null, mode: task?.mode || null,
+      category: logPrompt.category, mode: task?.mode || null,
     });
     reset();
   }
@@ -502,6 +524,13 @@ function FocusTimer({ tasks, onSessionComplete, onLogTime }) {
             <input type="number" min="1" value={logPrompt.minutes} onChange={e => setLogPrompt({ ...logPrompt, minutes: e.target.value })}
               style={{ width: 60, padding: "4px 6px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12, textAlign: "center" }} />
           </div>
+          {!task && (
+            <select value={logPrompt.category} onChange={e => setLogPrompt({ ...logPrompt, category: e.target.value })}
+              style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: `1px solid ${logPrompt.category ? COLORS.lavenderLight : "#a0524a"}`, fontSize: 12, marginBottom: 8, boxSizing: "border-box" }}>
+              <option value="">Category...</option>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          )}
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>
             {FEELING_OPTIONS.map(f => (
               <button key={f} onClick={() => setLogPrompt({ ...logPrompt, feeling: f })}
@@ -511,7 +540,7 @@ function FocusTimer({ tasks, onSessionComplete, onLogTime }) {
             ))}
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <button onClick={submitLog} style={{ flex: 1, padding: "8px 0", border: "none", borderRadius: 8, background: COLORS.sage, color: "#fff", fontSize: 12.5, cursor: "pointer" }}>Log session</button>
+            <button onClick={submitLog} disabled={!logPrompt.category} style={{ flex: 1, padding: "8px 0", border: "none", borderRadius: 8, background: logPrompt.category ? COLORS.sage : COLORS.lavenderLight, color: "#fff", fontSize: 12.5, cursor: logPrompt.category ? "pointer" : "default" }}>Log session</button>
             <button onClick={() => reset()} style={{ padding: "8px 12px", border: `1px solid ${COLORS.lavenderLight}`, borderRadius: 8, background: "#fff", color: COLORS.sage, fontSize: 12.5, cursor: "pointer" }}>Skip</button>
           </div>
           {expired && (
@@ -562,16 +591,23 @@ function FocusTimer({ tasks, onSessionComplete, onLogTime }) {
 // audit trail. Two ways to say how long it took: type the minutes directly,
 // or give a start and end time and let it calculate — whichever matches how
 // you actually noticed the time.
-function ManualTimeLogWidget({ tasks, onLogTime }) {
+function ManualTimeLogWidget({ tasks, categories, onLogTime }) {
   const [open, setOpen] = useState(false);
   const [taskId, setTaskId] = useState(null);
   const [freeText, setFreeText] = useState("");
+  const [category, setCategory] = useState("");
   const [mode, setMode] = useState("duration"); // "duration" | "range"
   const [minutes, setMinutes] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [feeling, setFeeling] = useState("");
   const task = tasks.find(t => t.id === taskId) || null;
+
+  function pickTask(id) {
+    setTaskId(id || null);
+    const t = tasks.find(x => x.id === id);
+    if (t?.category) setCategory(t.category);
+  }
 
   const rangeMinutes = (() => {
     if (!startTime || !endTime) return null;
@@ -593,10 +629,10 @@ function ManualTimeLogWidget({ tasks, onLogTime }) {
   })();
 
   const effectiveMinutes = mode === "duration" ? Number(minutes) || 0 : (rangeMinutes && rangeMinutes > 0 ? rangeMinutes : 0);
-  const canSave = effectiveMinutes > 0 && (task || freeText.trim());
+  const canSave = effectiveMinutes > 0 && (task || freeText.trim()) && category;
 
   function reset() {
-    setTaskId(null); setFreeText(""); setMinutes(""); setStartTime(""); setEndTime(""); setFeeling(""); setOpen(false);
+    setTaskId(null); setFreeText(""); setCategory(""); setMinutes(""); setStartTime(""); setEndTime(""); setFeeling(""); setOpen(false);
   }
 
   function save() {
@@ -604,7 +640,8 @@ function ManualTimeLogWidget({ tasks, onLogTime }) {
     onLogTime({
       taskId: task?.id || null, text: task?.text || freeText.trim(),
       minutes: effectiveMinutes, feeling: feeling || null,
-      category: task?.category || null, mode: task?.mode || null,
+      category: category || null, mode: task?.mode || null,
+      clockTime: mode === "range" ? startTime : null, // exact time-of-day when given, so a calendar view can place this precisely instead of guessing
     });
     reset();
   }
@@ -620,13 +657,17 @@ function ManualTimeLogWidget({ tasks, onLogTime }) {
   return (
     <div style={{ background: "#fff", borderRadius: 14, padding: 14, border: `1px solid ${COLORS.lavenderLight}` }}>
       <div style={{ fontSize: 12, marginBottom: 8, textAlign: "center", color: COLORS.sage }}>What did you spend time on?</div>
-      <select value={taskId || ""} onChange={e => setTaskId(e.target.value || null)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, marginBottom: 6, boxSizing: "border-box" }}>
+      <select value={taskId || ""} onChange={e => pickTask(e.target.value)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, marginBottom: 6, boxSizing: "border-box" }}>
         <option value="">Not tied to a task...</option>
         {tasks.map(t => <option key={t.id} value={t.id}>{t.text}</option>)}
       </select>
       {!taskId && (
-        <input value={freeText} onChange={e => setFreeText(e.target.value)} placeholder="What was it?" style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, marginBottom: 8, boxSizing: "border-box" }} />
+        <input value={freeText} onChange={e => setFreeText(e.target.value)} placeholder="What was it? (e.g. shower, commute, lunch)" style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, marginBottom: 8, boxSizing: "border-box" }} />
       )}
+      <select value={category} onChange={e => setCategory(e.target.value)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${category ? COLORS.lavenderLight : "#a0524a"}`, fontSize: 12.5, marginBottom: 8, boxSizing: "border-box" }}>
+        <option value="">Category...</option>
+        {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+      </select>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
         <button onClick={() => setMode("duration")} style={{ flex: 1, padding: "5px 0", borderRadius: 8, border: `1px solid ${mode === "duration" ? COLORS.sage : COLORS.lavenderLight}`, background: mode === "duration" ? COLORS.sage : "#fff", color: mode === "duration" ? "#fff" : COLORS.ink, fontSize: 11.5, cursor: "pointer" }}>Minutes</button>
@@ -675,13 +716,212 @@ function ManualTimeLogWidget({ tasks, onLogTime }) {
 // not just "here's what happened." The estimate-miss list is the main
 // payoff: it's the one place this data can directly make future scheduling
 // more accurate, with a one-tap way to act on it rather than just noting it.
-function TimeAuditReport({ timeAuditLog, tasks, updateTask, weekStartKey }) {
+// One row = one logged entry, editable in place. Its own small component
+// (not inlined in the parent's .map) so per-row edit state doesn't need to
+// be tracked by id in the parent — the same pattern used for recurring
+// task rows earlier, since keeping edit state locally scoped here avoids
+// an entire class of stale-state bugs.
+// A small palette cycled by position, since category colors aren't
+// guaranteed distinct enough at a glance in a pie (two categories with
+// similar sage/azure tones can be hard to tell apart as slices the way
+// they're not as bars, which have a label right next to each one).
+const PIE_COLORS = ["#8d7e97", "#006a7f", "#c98a3e", "#a8677a", "#7a8f5c", "#4f7a6b", "#9c5b8f", "#b3562f"];
+
+function TimeAuditPieChart({ data }) { // data: [ [label, minutes], ... ]
+  const total = data.reduce((s, [, m]) => s + m, 0);
+  if (total === 0) return null;
+  let angle = 0;
+  const radius = 60, cx = 70, cy = 70;
+  const slices = data.map(([label, minutes], i) => {
+    const fraction = minutes / total;
+    const startAngle = angle;
+    angle += fraction * 360;
+    const endAngle = angle;
+    const toXY = (a) => [cx + radius * Math.cos((a - 90) * Math.PI / 180), cy + radius * Math.sin((a - 90) * Math.PI / 180)];
+    const [x1, y1] = toXY(startAngle);
+    const [x2, y2] = toXY(endAngle);
+    const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+    const path = fraction >= 0.999
+      ? `M ${cx - radius} ${cy} A ${radius} ${radius} 0 1 1 ${cx + radius} ${cy} A ${radius} ${radius} 0 1 1 ${cx - radius} ${cy}` // a single category is the whole pie — an arc can't close on itself, so draw it as two half-circles
+      : `M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArc} 1 ${x2} ${y2} Z`;
+    return { path, color: PIE_COLORS[i % PIE_COLORS.length], label, minutes };
+  });
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
+      <svg width="140" height="140" viewBox="0 0 140 140">
+        {slices.map((s, i) => <path key={i} d={s.path} fill={s.color} />)}
+      </svg>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {slices.map((s, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5 }}>
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
+            <span>{s.label} · {s.minutes} min</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// A day-by-day view of the same week List already shows flat — grouping by
+// day and sorting within each day by actual (or inferred) clock time is
+// what turns a log into something that reads like "here's my day," which
+// is the thing a flat list can't show even though it holds the same data.
+function TimeAuditCalendarView({ weekEntries, weekStartKey, categories }) {
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const [y, m, d] = weekStartKey.split("-").map(Number);
+    const date = new Date(y, m - 1, d + i);
+    return { key: toKey(date), label: date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) };
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {days.map(day => {
+        const dayEntries = weekEntries
+          .filter(e => e.date === day.key)
+          .map(e => ({ ...e, _display: entryDisplayTime(e) }))
+          .sort((a, b) => (a._display.time || "").localeCompare(b._display.time || ""));
+        return (
+          <div key={day.key}>
+            <div style={{ fontSize: 11.5, fontWeight: 600, color: COLORS.sage, marginBottom: 4 }}>{day.label}</div>
+            {dayEntries.length === 0 ? (
+              <div style={{ fontSize: 11.5, color: COLORS.sage, opacity: 0.6, paddingLeft: 4 }}>Nothing logged</div>
+            ) : (
+              dayEntries.map(e => {
+                const catInfo = categories.find(c => c.id === e.category);
+                return (
+                  <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0 3px 4px", fontSize: 12 }}>
+                    <span style={{ width: 44, flexShrink: 0, color: COLORS.sage, fontVariantNumeric: "tabular-nums" }}>
+                      {e._display.approximate ? "~" : ""}{e._display.time || "--:--"}
+                    </span>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: catInfo?.color || COLORS.lavenderLight, flexShrink: 0 }} />
+                    <span style={{ flex: 1 }}>{e.text}</span>
+                    <span style={{ color: COLORS.sage, flexShrink: 0 }}>{e.minutes} min</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        );
+      })}
+      <div style={{ fontSize: 10.5, color: COLORS.sage, fontStyle: "italic", marginTop: 4 }}>
+        ~ marks a time inferred from when the entry was logged, not one you typed directly.
+      </div>
+    </div>
+  );
+}
+
+// Looks across every week on record, not just the one currently being
+// reviewed — the only way to answer "is this actually changing over time"
+// rather than just "what did this one week look like."
+function TimeAuditTrends({ timeAuditLog, currentWeekStartKey }) {
+  const WEEKS_BACK = 8;
+  const weeks = Array.from({ length: WEEKS_BACK }, (_, i) => {
+    const [y, m, d] = currentWeekStartKey.split("-").map(Number);
+    const date = new Date(y, m - 1, d - (WEEKS_BACK - 1 - i) * 7);
+    return toKey(date);
+  });
+  const totals = weeks.map(weekStart => {
+    const [y, m, d] = weekStart.split("-").map(Number);
+    const weekEnd = toKey(new Date(y, m - 1, d + 6));
+    return timeAuditLog.filter(e => e.date >= weekStart && e.date <= weekEnd).reduce((s, e) => s + (Number(e.minutes) || 0), 0);
+  });
+  const maxTotal = Math.max(1, ...totals);
+  const hasAnyData = totals.some(t => t > 0);
+
+  const width = 300, height = 110, padding = 20;
+  const points = totals.map((t, i) => {
+    const x = padding + (i / (WEEKS_BACK - 1)) * (width - padding * 2);
+    const y = height - padding - (t / maxTotal) * (height - padding * 2);
+    return [x, y];
+  });
+  const polyline = points.map(p => p.join(",")).join(" ");
+
+  if (!hasAnyData) {
+    return <div style={{ fontSize: 12.5, color: COLORS.sage, textAlign: "center" }}>Not enough history yet — this fills in as you keep logging week to week.</div>;
+  }
+
+  return (
+    <div>
+      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
+        <polyline points={polyline} fill="none" stroke={COLORS.sage} strokeWidth="2" />
+        {points.map(([x, y], i) => (
+          <circle key={i} cx={x} cy={y} r={totals[i] > 0 ? 3 : 2} fill={totals[i] > 0 ? COLORS.sage : COLORS.lavenderLight} />
+        ))}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, color: COLORS.sage, marginTop: 2 }}>
+        {weeks.map((w, i) => (
+          <span key={w} style={{ width: `${100 / WEEKS_BACK}%`, textAlign: "center" }}>
+            {i === 0 || i === weeks.length - 1 || w === currentWeekStartKey ? w.slice(5) : ""}
+          </span>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, textAlign: "center", color: COLORS.sage, marginTop: 6 }}>
+        Total minutes logged per week, last {WEEKS_BACK} weeks — this week is the rightmost point.
+      </div>
+    </div>
+  );
+}
+
+function TimeAuditEntryRow({ entry, categories, onUpdate, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(entry);
+  useEffect(() => { setDraft(entry); }, [entry]);
+
+  const catLabel = categories.find(c => c.id === entry.category)?.label || "Uncategorized";
+
+  if (!editing) {
+    return (
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${COLORS.lavenderLight}`, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12.5 }}>
+          {entry.text} <span style={{ color: COLORS.sage }}>· {catLabel} · {entry.minutes} min{entry.feeling ? ` · ${entry.feeling}` : ""}{entry.date ? ` · ${entry.date}` : ""}</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <button onClick={() => setEditing(true)} style={{ fontSize: 11, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Edit</button>
+          <button onClick={() => { if (window.confirm("Delete this logged entry?")) onDelete(entry.id); }} style={{ fontSize: 11, color: "#a0524a", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Delete</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "8px 0", borderBottom: `1px solid ${COLORS.lavenderLight}` }}>
+      <input value={draft.text} onChange={e => setDraft({ ...draft, text: e.target.value })} style={{ width: "100%", padding: "5px 8px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12, marginBottom: 6, boxSizing: "border-box" }} />
+      <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+        <input type="number" min="1" value={draft.minutes} onChange={e => setDraft({ ...draft, minutes: e.target.value })} style={{ width: 70, padding: "5px 8px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12 }} />
+        <select value={draft.category || ""} onChange={e => setDraft({ ...draft, category: e.target.value })} style={{ padding: "5px 8px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12 }}>
+          <option value="">Uncategorized</option>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+        </select>
+        <select value={draft.feeling || ""} onChange={e => setDraft({ ...draft, feeling: e.target.value || null })} style={{ padding: "5px 8px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12 }}>
+          <option value="">No feeling tag</option>
+          {FEELING_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
+        </select>
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={() => { onUpdate(entry.id, { text: draft.text, minutes: Number(draft.minutes) || entry.minutes, category: draft.category || null, feeling: draft.feeling || null }); setEditing(false); }}
+          style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 6, border: "none", background: COLORS.sage, color: "#fff", cursor: "pointer" }}>Save</button>
+        <button onClick={() => { setDraft(entry); setEditing(false); }} style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", color: COLORS.sage, cursor: "pointer" }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// Weekly report — deliberately not a dashboard of numbers for their own
+// sake. Every section is built to answer "so what should I do differently,"
+// not just "here's what happened." The estimate-miss list is the main
+// payoff: it's the one place this data can directly make future scheduling
+// more accurate, with a one-tap way to act on it rather than just noting it.
+function TimeAuditReport({ timeAuditLog, tasks, categories, updateTask, onUpdateEntry, onDeleteEntry, weekStartKey }) {
+  const [view, setView] = useState("list"); // "list" | "calendar" | "trends"
+  const [breakdownStyle, setBreakdownStyle] = useState("bar"); // "bar" | "pie" — same data, just a different lens on it
   const weekEndKey = (() => {
     const [y, m, d] = weekStartKey.split("-").map(Number);
     const end = new Date(y, m - 1, d + 6);
     return toKey(end);
   })();
   const weekEntries = timeAuditLog.filter(e => e.date >= weekStartKey && e.date <= weekEndKey);
+  const sortedEntries = [...weekEntries].sort((a, b) => (b.loggedAt || "").localeCompare(a.loggedAt || ""));
 
   const totalMinutes = weekEntries.reduce((s, e) => s + (Number(e.minutes) || 0), 0);
 
@@ -703,15 +943,20 @@ function TimeAuditReport({ timeAuditLog, tasks, updateTask, weekStartKey }) {
       .sort((a, b) => Math.abs(b.avgMinutes - b.estMinutes) - Math.abs(a.avgMinutes - a.estMinutes));
   })();
 
+  // Every logged entry counts here now, including free-text ones with no
+  // linked task — as long as it has a category (which capture now
+  // requires), it shows up. Only entries saved before the category
+  // requirement existed can still land in "Uncategorized."
   const byCategory = (() => {
     const totals = {};
     weekEntries.forEach(e => {
-      const key = e.category || "Uncategorized";
-      totals[key] = (totals[key] || 0) + (Number(e.minutes) || 0);
+      const label = categories.find(c => c.id === e.category)?.label || "Uncategorized";
+      totals[label] = (totals[label] || 0) + (Number(e.minutes) || 0);
     });
     return Object.entries(totals).sort((a, b) => b[1] - a[1]);
   })();
   const maxCategoryMinutes = byCategory.length ? byCategory[0][1] : 1;
+  const uncategorizedMinutes = byCategory.find(([label]) => label === "Uncategorized")?.[1] || 0;
 
   const byFeeling = (() => {
     const counts = {};
@@ -753,22 +998,37 @@ function TimeAuditReport({ timeAuditLog, tasks, updateTask, weekStartKey }) {
           )}
 
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.sage, marginBottom: 8 }}>Where the time went</div>
-            {byCategory.map(([label, minutes]) => (
-              <div key={label} style={{ marginBottom: 6 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 2 }}>
-                  <span>{label}</span>
-                  <span style={{ color: COLORS.sage }}>{minutes} min</span>
-                </div>
-                <div style={{ height: 6, borderRadius: 999, background: COLORS.lavenderLight }}>
-                  <div style={{ height: 6, borderRadius: 999, width: `${Math.round((minutes / maxCategoryMinutes) * 100)}%`, background: COLORS.sage }} />
-                </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.sage }}>Where the time went</div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={() => setBreakdownStyle("bar")} style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 999, border: `1px solid ${breakdownStyle === "bar" ? COLORS.sage : COLORS.lavenderLight}`, background: breakdownStyle === "bar" ? COLORS.sage : "#fff", color: breakdownStyle === "bar" ? "#fff" : COLORS.sage, cursor: "pointer" }}>Bars</button>
+                <button onClick={() => setBreakdownStyle("pie")} style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 999, border: `1px solid ${breakdownStyle === "pie" ? COLORS.sage : COLORS.lavenderLight}`, background: breakdownStyle === "pie" ? COLORS.sage : "#fff", color: breakdownStyle === "pie" ? "#fff" : COLORS.sage, cursor: "pointer" }}>Pie</button>
               </div>
-            ))}
+            </div>
+            {breakdownStyle === "bar" ? (
+              byCategory.map(([label, minutes]) => (
+                <div key={label} style={{ marginBottom: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 2 }}>
+                    <span>{label}</span>
+                    <span style={{ color: COLORS.sage }}>{minutes} min</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 999, background: COLORS.lavenderLight }}>
+                    <div style={{ height: 6, borderRadius: 999, width: `${Math.round((minutes / maxCategoryMinutes) * 100)}%`, background: COLORS.sage }} />
+                  </div>
+                </div>
+              ))
+            ) : (
+              <TimeAuditPieChart data={byCategory} />
+            )}
+            {uncategorizedMinutes > 0 && (
+              <div style={{ fontSize: 10.5, color: COLORS.sage, fontStyle: "italic", marginTop: 4 }}>
+                "Uncategorized" is from entries logged before a category became required — edit them in List view to fix that.
+              </div>
+            )}
           </div>
 
           {Object.keys(byFeeling).length > 0 && (
-            <div>
+            <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.sage, marginBottom: 8 }}>How it felt</div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {FEELING_OPTIONS.filter(f => byFeeling[f]).map(f => (
@@ -776,6 +1036,28 @@ function TimeAuditReport({ timeAuditLog, tasks, updateTask, weekStartKey }) {
                 ))}
               </div>
             </div>
+          )}
+
+          <div style={{ display: "flex", gap: 6, marginBottom: 12, borderTop: `1px solid ${COLORS.lavenderLight}`, paddingTop: 12 }}>
+            {[["list", "List"], ["calendar", "Calendar"], ["trends", "Trends"]].map(([id, label]) => (
+              <button key={id} onClick={() => setView(id)} style={{ fontSize: 12, padding: "5px 12px", borderRadius: 8, border: `1px solid ${view === id ? COLORS.sage : COLORS.lavenderLight}`, background: view === id ? COLORS.sage : "#fff", color: view === id ? "#fff" : COLORS.ink, cursor: "pointer" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {view === "list" && (
+            <div>
+              {sortedEntries.map(e => (
+                <TimeAuditEntryRow key={e.id} entry={e} categories={categories} onUpdate={onUpdateEntry} onDelete={onDeleteEntry} />
+              ))}
+            </div>
+          )}
+          {view === "calendar" && (
+            <TimeAuditCalendarView weekEntries={weekEntries} weekStartKey={weekStartKey} categories={categories} />
+          )}
+          {view === "trends" && (
+            <TimeAuditTrends timeAuditLog={timeAuditLog} currentWeekStartKey={weekStartKey} />
           )}
         </>
       )}
@@ -1901,6 +2183,12 @@ export default function RootSystem() {
   const [timeAuditLog, setTimeAuditLog] = useState([]);
   function logTimeAuditEntry(entry) {
     setTimeAuditLog(prev => [{ id: uid(), date: toKey(new Date()), loggedAt: new Date().toISOString(), ...entry }, ...prev]);
+  }
+  function updateTimeAuditEntry(id, patch) {
+    setTimeAuditLog(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e));
+  }
+  function deleteTimeAuditEntry(id) {
+    setTimeAuditLog(prev => prev.filter(e => e.id !== id));
   }
   const [dailyThreeEditing, setDailyThreeEditing] = useState(null);
   const [dailyThreeDrafts, setDailyThreeDrafts] = useState({});
@@ -3282,9 +3570,9 @@ export default function RootSystem() {
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }} className="today-grid">
               <div>
-                <FocusTimer tasks={tasksByStatus[STATUS.ACTIVE]} onSessionComplete={t => { if (t) updateTask(t.id, { status: STATUS.COMPLETED }); }} onLogTime={logTimeAuditEntry} />
+                <FocusTimer tasks={tasksByStatus[STATUS.ACTIVE]} categories={categories} onSessionComplete={t => { if (t) updateTask(t.id, { status: STATUS.COMPLETED }); }} onLogTime={logTimeAuditEntry} />
                 <div style={{ marginTop: 10 }}>
-                  <ManualTimeLogWidget tasks={tasksByStatus[STATUS.ACTIVE]} onLogTime={logTimeAuditEntry} />
+                  <ManualTimeLogWidget tasks={tasksByStatus[STATUS.ACTIVE]} categories={categories} onLogTime={logTimeAuditEntry} />
                 </div>
               </div>
               <div>
@@ -4319,7 +4607,7 @@ export default function RootSystem() {
               />
             </div>
             <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, gridColumn: "1 / -1" }}>
-              <TimeAuditReport timeAuditLog={timeAuditLog} tasks={tasks} updateTask={updateTask} weekStartKey={currentReviewWeekStart()} />
+              <TimeAuditReport timeAuditLog={timeAuditLog} tasks={tasks} categories={categories} updateTask={updateTask} onUpdateEntry={updateTimeAuditEntry} onDeleteEntry={deleteTimeAuditEntry} weekStartKey={currentReviewWeekStart()} />
             </div>
             <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, gridColumn: "1 / -1" }}>
               <ReviewReport wheelLog={wheelLog} sscrLog={sscrLog} closeoutLog={closeoutLog} tasks={tasks} reportRef={reportRef} />
