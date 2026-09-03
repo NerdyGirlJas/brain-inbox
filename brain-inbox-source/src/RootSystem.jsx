@@ -395,16 +395,25 @@ function ClockFace({ pct }) {
 }
 
 const FOCUS_DURATIONS = [10, 20, 25, 45];
+const FEELING_OPTIONS = ["Focused", "Scattered", "Draining", "Easy"];
 
-function FocusTimer({ tasks, onSessionComplete }) {
+function FocusTimer({ tasks, onSessionComplete, onLogTime }) {
   const [taskId, setTaskId] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
   const [duration, setDuration] = useState(20);
+  const [totalSeconds, setTotalSeconds] = useState(20 * 60); // duration + any added time — the real basis for elapsed/logged minutes
   const [secondsLeft, setSecondsLeft] = useState(20 * 60);
   const [running, setRunning] = useState(false);
   const [justCompleted, setJustCompleted] = useState(false);
+  const [logPrompt, setLogPrompt] = useState(null); // { minutes, feeling } while the capture prompt is open, else null
   const intervalRef = useRef(null);
   const task = tasks.find(t => t.id === taskId) || null;
+
+  // Read inside the interval closure below without needing it in the
+  // effect's dependency array (which would tear the interval down and
+  // rebuild it on every add-time click) — a ref always has the latest value.
+  const totalSecondsRef = useRef(totalSeconds);
+  useEffect(() => { totalSecondsRef.current = totalSeconds; }, [totalSeconds]);
 
   useEffect(() => {
     if (running) {
@@ -415,6 +424,7 @@ function FocusTimer({ tasks, onSessionComplete }) {
             setRunning(false);
             setJustCompleted(true);
             onSessionComplete(task);
+            setLogPrompt({ minutes: Math.round(totalSecondsRef.current / 60), feeling: "" });
             return 0;
           }
           return s - 1;
@@ -430,13 +440,46 @@ function FocusTimer({ tasks, onSessionComplete }) {
   function reset(mins = duration) {
     setRunning(false);
     setJustCompleted(false);
+    setLogPrompt(null);
     setSecondsLeft(mins * 60);
+    setTotalSeconds(mins * 60);
+  }
+
+  // For going longer than originally planned — extends the countdown and
+  // the "total" basis so the eventual logged time is accurate, without
+  // losing progress or needing to restart the session.
+  function addMinutes(mins) {
+    setSecondsLeft(s => s + mins * 60);
+    setTotalSeconds(s => s + mins * 60);
+    if (expired) { setJustCompleted(false); setLogPrompt(null); setRunning(true); }
+  }
+
+  // For finishing earlier than planned — logs the real elapsed time rather
+  // than the full originally-allotted duration, and deliberately does NOT
+  // auto-complete the linked task the way natural completion does, since
+  // stopping early usually means the work isn't actually finished.
+  function stopAndLog() {
+    clearInterval(intervalRef.current);
+    setRunning(false);
+    const elapsedMinutes = Math.max(1, Math.round((totalSeconds - secondsLeft) / 60));
+    setLogPrompt({ minutes: elapsedMinutes, feeling: "" });
+  }
+
+  function submitLog() {
+    if (!logPrompt) return;
+    onLogTime({
+      taskId: task?.id || null, text: task?.text || "Focus session",
+      minutes: Number(logPrompt.minutes) || 0, feeling: logPrompt.feeling || null,
+      category: task?.category || null, mode: task?.mode || null,
+    });
+    reset();
   }
 
   const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
   const ss = String(secondsLeft % 60).padStart(2, "0");
-  const pct = duration ? ((duration * 60 - secondsLeft) / (duration * 60)) * 100 : 0;
+  const pct = totalSeconds ? ((totalSeconds - secondsLeft) / totalSeconds) * 100 : 0;
   const expired = secondsLeft === 0;
+  const inProgress = running || (!expired && secondsLeft < totalSeconds); // running or paused mid-session
 
   return (
     <div style={{ background: "#fff", borderRadius: 14, padding: 16, border: `1px solid ${COLORS.lavenderLight}` }}>
@@ -445,34 +488,297 @@ function FocusTimer({ tasks, onSessionComplete }) {
       <div style={{ textAlign: "center", fontSize: 22, fontWeight: 600, margin: "8px 0 4px", fontFamily: "'Playfair Display', Georgia, serif", letterSpacing: "-0.02em" }}>
         {expired ? "✓ Session complete" : `${mm}:${ss}`}
       </div>
-      {expired && justCompleted && (
+      {expired && justCompleted && !logPrompt && (
         <div style={{ textAlign: "center", fontSize: 11, color: COLORS.sage, marginBottom: 8 }}>
           {task ? `"${task.text}" checked off.` : "Nice work."}
         </div>
       )}
-      <div style={{ position: "relative", marginBottom: 10 }}>
-        <button onClick={() => setShowPicker(s => !s)} style={{ width: "100%", textAlign: "left", padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 12.5, display: "flex", justifyContent: "space-between", cursor: "pointer" }}>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task ? task.text : "Choose a task"}</span>
-          <span>&#9656;</span>
-        </button>
-        {showPicker && (
-          <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1px solid ${COLORS.lavenderLight}`, borderRadius: 8, marginTop: 4, zIndex: 10, maxHeight: 180, overflowY: "auto" }}>
-            {tasks.length === 0
-              ? <div style={{ fontSize: 11, padding: "8px 12px", opacity: 0.6 }}>No active tasks yet — add one from your Inbox.</div>
-              : tasks.map(t => (
-                <button key={t.id} onClick={() => { setTaskId(t.id); setShowPicker(false); }} style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 12px", border: "none", background: "transparent", fontSize: 12, cursor: "pointer" }}>{t.text}</button>
-              ))}
+
+      {logPrompt ? (
+        <div style={{ background: COLORS.cream, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 12, marginBottom: 8, textAlign: "center" }}>Log this session{task ? ` — "${task.text}"` : ""}</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: COLORS.sage }}>Minutes</span>
+            <input type="number" min="1" value={logPrompt.minutes} onChange={e => setLogPrompt({ ...logPrompt, minutes: e.target.value })}
+              style={{ width: 60, padding: "4px 6px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12, textAlign: "center" }} />
           </div>
-        )}
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>
+            {FEELING_OPTIONS.map(f => (
+              <button key={f} onClick={() => setLogPrompt({ ...logPrompt, feeling: f })}
+                style={{ border: `1px solid ${logPrompt.feeling === f ? COLORS.sage : COLORS.lavenderLight}`, background: logPrompt.feeling === f ? COLORS.sage : "transparent", color: logPrompt.feeling === f ? "#fff" : COLORS.ink, borderRadius: 999, padding: "3px 10px", fontSize: 11, cursor: "pointer" }}>
+                {f}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <button onClick={submitLog} style={{ flex: 1, padding: "8px 0", border: "none", borderRadius: 8, background: COLORS.sage, color: "#fff", fontSize: 12.5, cursor: "pointer" }}>Log session</button>
+            <button onClick={() => reset()} style={{ padding: "8px 12px", border: `1px solid ${COLORS.lavenderLight}`, borderRadius: 8, background: "#fff", color: COLORS.sage, fontSize: 12.5, cursor: "pointer" }}>Skip</button>
+          </div>
+          {expired && (
+            <button onClick={() => addMinutes(5)} style={{ width: "100%", padding: "6px 0", border: "none", background: "none", color: COLORS.sage, fontSize: 11.5, cursor: "pointer", textDecoration: "underline" }}>
+              Actually, give me 5 more minutes
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div style={{ position: "relative", marginBottom: 10 }}>
+            <button onClick={() => setShowPicker(s => !s)} style={{ width: "100%", textAlign: "left", padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 12.5, display: "flex", justifyContent: "space-between", cursor: "pointer" }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task ? task.text : "Choose a task"}</span>
+              <span>&#9656;</span>
+            </button>
+            {showPicker && (
+              <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1px solid ${COLORS.lavenderLight}`, borderRadius: 8, marginTop: 4, zIndex: 10, maxHeight: 180, overflowY: "auto" }}>
+                {tasks.length === 0
+                  ? <div style={{ fontSize: 11, padding: "8px 12px", opacity: 0.6 }}>No active tasks yet — add one from your Inbox.</div>
+                  : tasks.map(t => (
+                    <button key={t.id} onClick={() => { setTaskId(t.id); setShowPicker(false); }} style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 12px", border: "none", background: "transparent", fontSize: 12, cursor: "pointer" }}>{t.text}</button>
+                  ))}
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "center", marginBottom: 12 }}>
+            {FOCUS_DURATIONS.map(m => (
+              <button key={m} onClick={() => { setDuration(m); reset(m); }} style={{ border: `1px solid ${duration === m ? COLORS.sage : COLORS.lavenderLight}`, background: duration === m ? COLORS.sage : "transparent", color: duration === m ? "#fff" : COLORS.ink, borderRadius: 999, padding: "4px 11px", fontSize: 12, cursor: "pointer" }}>{m}m</button>
+            ))}
+          </div>
+          <button onClick={() => expired ? reset() : setRunning(r => !r)} style={{ width: "100%", padding: "10px 0", border: "none", borderRadius: 10, background: COLORS.sage, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+            {running ? "Pause" : expired ? "Start another session" : "Start the timer"}
+          </button>
+          {(running || inProgress) && (
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={() => addMinutes(5)} style={{ flex: 1, padding: "7px 0", border: `1px solid ${COLORS.lavenderLight}`, borderRadius: 8, background: "#fff", color: COLORS.sage, fontSize: 12, cursor: "pointer" }}>+5 min</button>
+              <button onClick={stopAndLog} style={{ flex: 1, padding: "7px 0", border: `1px solid ${COLORS.lavenderLight}`, borderRadius: 8, background: "#fff", color: COLORS.sage, fontSize: 12, cursor: "pointer" }}>Stop &amp; log</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// For time worth logging that never went through the Focus Timer — reading,
+// a study session done away from the app, anything you want in the same
+// audit trail. Two ways to say how long it took: type the minutes directly,
+// or give a start and end time and let it calculate — whichever matches how
+// you actually noticed the time.
+function ManualTimeLogWidget({ tasks, onLogTime }) {
+  const [open, setOpen] = useState(false);
+  const [taskId, setTaskId] = useState(null);
+  const [freeText, setFreeText] = useState("");
+  const [mode, setMode] = useState("duration"); // "duration" | "range"
+  const [minutes, setMinutes] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [feeling, setFeeling] = useState("");
+  const task = tasks.find(t => t.id === taskId) || null;
+
+  const rangeMinutes = (() => {
+    if (!startTime || !endTime) return null;
+    const [sh, sm] = startTime.split(":").map(Number);
+    const [eh, em] = endTime.split(":").map(Number);
+    let diff = (eh * 60 + em) - (sh * 60 + sm);
+    // An end time earlier than the start time almost always means the
+    // session crossed midnight (e.g. 11:30pm to 12:15am) rather than a
+    // typo — assuming "next day" and adding 24h gives the right duration
+    // in the common case. The one real ambiguity this can't resolve is a
+    // session longer than 24 hours, which isn't a realistic study session.
+    if (diff < 0) diff += 24 * 60;
+    return diff;
+  })();
+  const crossesMidnight = startTime && endTime && (() => {
+    const [sh, sm] = startTime.split(":").map(Number);
+    const [eh, em] = endTime.split(":").map(Number);
+    return (eh * 60 + em) < (sh * 60 + sm);
+  })();
+
+  const effectiveMinutes = mode === "duration" ? Number(minutes) || 0 : (rangeMinutes && rangeMinutes > 0 ? rangeMinutes : 0);
+  const canSave = effectiveMinutes > 0 && (task || freeText.trim());
+
+  function reset() {
+    setTaskId(null); setFreeText(""); setMinutes(""); setStartTime(""); setEndTime(""); setFeeling(""); setOpen(false);
+  }
+
+  function save() {
+    if (!canSave) return;
+    onLogTime({
+      taskId: task?.id || null, text: task?.text || freeText.trim(),
+      minutes: effectiveMinutes, feeling: feeling || null,
+      category: task?.category || null, mode: task?.mode || null,
+    });
+    reset();
+  }
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} style={{ width: "100%", padding: "8px 0", border: `1px dashed ${COLORS.lavenderLight}`, borderRadius: 10, background: "#fff", color: COLORS.sage, fontSize: 12.5, cursor: "pointer" }}>
+        + Log time not tracked by the timer
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, padding: 14, border: `1px solid ${COLORS.lavenderLight}` }}>
+      <div style={{ fontSize: 12, marginBottom: 8, textAlign: "center", color: COLORS.sage }}>What did you spend time on?</div>
+      <select value={taskId || ""} onChange={e => setTaskId(e.target.value || null)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, marginBottom: 6, boxSizing: "border-box" }}>
+        <option value="">Not tied to a task...</option>
+        {tasks.map(t => <option key={t.id} value={t.id}>{t.text}</option>)}
+      </select>
+      {!taskId && (
+        <input value={freeText} onChange={e => setFreeText(e.target.value)} placeholder="What was it?" style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, marginBottom: 8, boxSizing: "border-box" }} />
+      )}
+
+      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+        <button onClick={() => setMode("duration")} style={{ flex: 1, padding: "5px 0", borderRadius: 8, border: `1px solid ${mode === "duration" ? COLORS.sage : COLORS.lavenderLight}`, background: mode === "duration" ? COLORS.sage : "#fff", color: mode === "duration" ? "#fff" : COLORS.ink, fontSize: 11.5, cursor: "pointer" }}>Minutes</button>
+        <button onClick={() => setMode("range")} style={{ flex: 1, padding: "5px 0", borderRadius: 8, border: `1px solid ${mode === "range" ? COLORS.sage : COLORS.lavenderLight}`, background: mode === "range" ? COLORS.sage : "#fff", color: mode === "range" ? "#fff" : COLORS.ink, fontSize: 11.5, cursor: "pointer" }}>Start &amp; end time</button>
       </div>
-      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "center", marginBottom: 12 }}>
-        {FOCUS_DURATIONS.map(m => (
-          <button key={m} onClick={() => { setDuration(m); reset(m); }} style={{ border: `1px solid ${duration === m ? COLORS.sage : COLORS.lavenderLight}`, background: duration === m ? COLORS.sage : "transparent", color: duration === m ? "#fff" : COLORS.ink, borderRadius: 999, padding: "4px 11px", fontSize: 12, cursor: "pointer" }}>{m}m</button>
+
+      {mode === "duration" ? (
+        <input type="number" min="1" value={minutes} onChange={e => setMinutes(e.target.value)} placeholder="How many minutes?" style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, marginBottom: 8, boxSizing: "border-box" }} />
+      ) : (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} style={{ flex: 1, padding: "7px 8px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5 }} />
+            <span style={{ fontSize: 11, color: COLORS.sage }}>to</span>
+            <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} style={{ flex: 1, padding: "7px 8px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5 }} />
+          </div>
+          {rangeMinutes != null && rangeMinutes > 0 && (
+            <div style={{ fontSize: 11, color: COLORS.sage, marginTop: 4, textAlign: "center" }}>
+              = {rangeMinutes} minutes{crossesMidnight ? " (crosses midnight)" : ""}
+            </div>
+          )}
+          {rangeMinutes === 0 && (
+            <div style={{ fontSize: 11, color: "#a0524a", marginTop: 4, textAlign: "center" }}>Start and end time can't be the same.</div>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>
+        {FEELING_OPTIONS.map(f => (
+          <button key={f} onClick={() => setFeeling(f)}
+            style={{ border: `1px solid ${feeling === f ? COLORS.sage : COLORS.lavenderLight}`, background: feeling === f ? COLORS.sage : "transparent", color: feeling === f ? "#fff" : COLORS.ink, borderRadius: 999, padding: "3px 10px", fontSize: 11, cursor: "pointer" }}>
+            {f}
+          </button>
         ))}
       </div>
-      <button onClick={() => expired ? reset() : setRunning(r => !r)} style={{ width: "100%", padding: "10px 0", border: "none", borderRadius: 10, background: COLORS.sage, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
-        {running ? "Pause" : expired ? "Start another session" : "Start the timer"}
-      </button>
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={save} disabled={!canSave} style={{ flex: 1, padding: "8px 0", border: "none", borderRadius: 8, background: canSave ? COLORS.sage : COLORS.lavenderLight, color: "#fff", fontSize: 12.5, cursor: canSave ? "pointer" : "default" }}>Log it</button>
+        <button onClick={reset} style={{ padding: "8px 12px", border: `1px solid ${COLORS.lavenderLight}`, borderRadius: 8, background: "#fff", color: COLORS.sage, fontSize: 12.5, cursor: "pointer" }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// Weekly report — deliberately not a dashboard of numbers for their own
+// sake. Every section is built to answer "so what should I do differently,"
+// not just "here's what happened." The estimate-miss list is the main
+// payoff: it's the one place this data can directly make future scheduling
+// more accurate, with a one-tap way to act on it rather than just noting it.
+function TimeAuditReport({ timeAuditLog, tasks, updateTask, weekStartKey }) {
+  const weekEndKey = (() => {
+    const [y, m, d] = weekStartKey.split("-").map(Number);
+    const end = new Date(y, m - 1, d + 6);
+    return toKey(end);
+  })();
+  const weekEntries = timeAuditLog.filter(e => e.date >= weekStartKey && e.date <= weekEndKey);
+
+  const totalMinutes = weekEntries.reduce((s, e) => s + (Number(e.minutes) || 0), 0);
+
+  // Estimate misses: only meaningful for entries tied to a task that
+  // actually has an estimate to compare against. Averaged per task so one
+  // unusually long session doesn't make a task look worse than it is.
+  const estimateMisses = (() => {
+    const byTask = {};
+    weekEntries.forEach(e => {
+      if (!e.taskId) return;
+      const task = tasks.find(t => t.id === e.taskId);
+      if (!task || !task.estMinutes) return;
+      (byTask[e.taskId] = byTask[e.taskId] || { text: task.text, estMinutes: task.estMinutes, total: 0, count: 0 }).total += Number(e.minutes) || 0;
+      byTask[e.taskId].count += 1;
+    });
+    return Object.entries(byTask)
+      .map(([taskId, d]) => ({ taskId, text: d.text, estMinutes: d.estMinutes, avgMinutes: Math.round(d.total / d.count), count: d.count }))
+      .filter(d => Math.abs(d.avgMinutes - d.estMinutes) >= 5) // ignore noise-level differences
+      .sort((a, b) => Math.abs(b.avgMinutes - b.estMinutes) - Math.abs(a.avgMinutes - a.estMinutes));
+  })();
+
+  const byCategory = (() => {
+    const totals = {};
+    weekEntries.forEach(e => {
+      const key = e.category || "Uncategorized";
+      totals[key] = (totals[key] || 0) + (Number(e.minutes) || 0);
+    });
+    return Object.entries(totals).sort((a, b) => b[1] - a[1]);
+  })();
+  const maxCategoryMinutes = byCategory.length ? byCategory[0][1] : 1;
+
+  const byFeeling = (() => {
+    const counts = {};
+    weekEntries.forEach(e => { if (e.feeling) counts[e.feeling] = (counts[e.feeling] || 0) + 1; });
+    return counts;
+  })();
+
+  const headline = (() => {
+    if (weekEntries.length === 0) return "Nothing logged yet this week — the report fills in as you go.";
+    if (estimateMisses.length > 0) {
+      const top = estimateMisses[0];
+      const direction = top.avgMinutes > top.estMinutes ? "running long" : "running short";
+      return `"${top.text}" is ${direction} — estimated ${top.estMinutes} min, averaging ${top.avgMinutes} min across ${top.count} session${top.count === 1 ? "" : "s"}.`;
+    }
+    return `${weekEntries.length} session${weekEntries.length === 1 ? "" : "s"} logged, ${Math.round(totalMinutes / 60 * 10) / 10} hours total — estimates are holding up well this week.`;
+  })();
+
+  return (
+    <div>
+      <div style={{ fontFamily: DISPLAY_FONT, fontSize: 18, textAlign: "center", margin: "0 0 6px" }}>Time Audit</div>
+      <div style={{ fontSize: 13, textAlign: "center", color: COLORS.ink, marginBottom: 16, fontStyle: "italic" }}>{headline}</div>
+
+      {weekEntries.length > 0 && (
+        <>
+          {estimateMisses.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.sage, marginBottom: 8 }}>Estimate misses</div>
+              {estimateMisses.slice(0, 4).map(d => (
+                <div key={d.taskId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${COLORS.lavenderLight}`, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 12.5 }}>
+                    {d.text} <span style={{ color: COLORS.sage }}>· est {d.estMinutes} min, avg {d.avgMinutes} min ({d.count}x)</span>
+                  </div>
+                  <button onClick={() => updateTask(d.taskId, { estMinutes: d.avgMinutes })} style={{ fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "none", background: COLORS.sage, color: "#fff", cursor: "pointer", flexShrink: 0 }}>
+                    Update estimate to {d.avgMinutes}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.sage, marginBottom: 8 }}>Where the time went</div>
+            {byCategory.map(([label, minutes]) => (
+              <div key={label} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 2 }}>
+                  <span>{label}</span>
+                  <span style={{ color: COLORS.sage }}>{minutes} min</span>
+                </div>
+                <div style={{ height: 6, borderRadius: 999, background: COLORS.lavenderLight }}>
+                  <div style={{ height: 6, borderRadius: 999, width: `${Math.round((minutes / maxCategoryMinutes) * 100)}%`, background: COLORS.sage }} />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {Object.keys(byFeeling).length > 0 && (
+            <div>
+              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.sage, marginBottom: 8 }}>How it felt</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {FEELING_OPTIONS.filter(f => byFeeling[f]).map(f => (
+                  <span key={f} style={{ fontSize: 11.5, background: COLORS.cream, borderRadius: 999, padding: "4px 10px" }}>{f} · {byFeeling[f]}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1591,6 +1897,11 @@ export default function RootSystem() {
 
   /* ---------- Daily 3 (Today tab) ---------- */
   const [dailyThreeIds, setDailyThreeIds] = useState([null, null, null]);
+  // { id, taskId, text, minutes, feeling, category, mode, date, loggedAt }
+  const [timeAuditLog, setTimeAuditLog] = useState([]);
+  function logTimeAuditEntry(entry) {
+    setTimeAuditLog(prev => [{ id: uid(), date: toKey(new Date()), loggedAt: new Date().toISOString(), ...entry }, ...prev]);
+  }
   const [dailyThreeEditing, setDailyThreeEditing] = useState(null);
   const [dailyThreeDrafts, setDailyThreeDrafts] = useState({});
   const [dailyThreeCategoryDrafts, setDailyThreeCategoryDrafts] = useState({});
@@ -1834,11 +2145,20 @@ export default function RootSystem() {
       .catch(err => { console.error("Saving reading progress failed:", err); setPageSaveState("error"); });
   }
 
+  // This has to wait for isLoaded, not run on a bare mount-once effect —
+  // otherwise it compares against cupDate's just-initialized default
+  // (which trivially equals today) rather than the real persisted date
+  // that loads a moment later asynchronously, and by then this effect has
+  // already fired and never runs again. That was the actual bug: the
+  // reset logic existed but always ran before there was anything real to
+  // compare against. Same root cause affected the Dopamine Bank's daily
+  // counter, fixed here too.
   useEffect(() => {
+    if (!isLoaded) return;
     const todayKey = toKey(new Date());
     if (cupDate !== todayKey) { setCupFilled([]); setCupDate(todayKey); }
     if (dopamineBankCountDate !== todayKey) { setDopamineBankCount(0); setDopamineBankCountDate(todayKey); }
-  }, []);
+  }, [isLoaded]);
 
   /* ---------- calendar settings (from original Calendar Maker) ---------- */
   const [month, setMonth] = useState(today.getMonth());
@@ -2105,6 +2425,7 @@ export default function RootSystem() {
         if (data.dopamineBankCount !== undefined) setDopamineBankCount(data.dopamineBankCount);
         if (data.dopamineBankCountDate) setDopamineBankCountDate(data.dopamineBankCountDate);
         if (data.dailyThreeIds) setDailyThreeIds(data.dailyThreeIds);
+        if (data.timeAuditLog) setTimeAuditLog(data.timeAuditLog);
         if (data.wheelLog) setWheelLog(data.wheelLog);
         if (data.sscrLog) setSscrLog(data.sscrLog);
         if (data.closeoutLog) setCloseoutLog(data.closeoutLog);
@@ -2140,7 +2461,7 @@ export default function RootSystem() {
           inboxItems, tasks, categories, events, savedQuotes, quote, author, weekStart,
           cycleStart, cycleLength, periodLength, includeHolidays, themeBg, themeAccent, themeHighlight,
           routines, showRoutinesOnMonth, showRoutinesOnWeek,
-          todayLog, readingBook, libraryKey, linkedBookId, cupFilled, cupDate, dailyThreeIds, wheelLog, sscrLog, closeoutLog,
+          todayLog, readingBook, libraryKey, linkedBookId, cupFilled, cupDate, dailyThreeIds, timeAuditLog, wheelLog, sscrLog, closeoutLog,
           studyHubKey, importedStudyHubIds,
           dopamineBankCustom, dopamineBankDismissed, dopamineBankCount, dopamineBankCountDate,
         };
@@ -2156,7 +2477,7 @@ export default function RootSystem() {
       }
     }, 700);
     return () => clearTimeout(handle);
-  }, [isLoaded, inboxItems, tasks, categories, events, savedQuotes, quote, author, weekStart, cycleStart, cycleLength, periodLength, includeHolidays, themeBg, themeAccent, themeHighlight, routines, showRoutinesOnMonth, showRoutinesOnWeek, todayLog, readingBook, libraryKey, linkedBookId, cupFilled, cupDate, dailyThreeIds, wheelLog, sscrLog, closeoutLog, studyHubKey, importedStudyHubIds, dopamineBankCustom, dopamineBankDismissed, dopamineBankCount, dopamineBankCountDate]);
+  }, [isLoaded, inboxItems, tasks, categories, events, savedQuotes, quote, author, weekStart, cycleStart, cycleLength, periodLength, includeHolidays, themeBg, themeAccent, themeHighlight, routines, showRoutinesOnMonth, showRoutinesOnWeek, todayLog, readingBook, libraryKey, linkedBookId, cupFilled, cupDate, dailyThreeIds, timeAuditLog, wheelLog, sscrLog, closeoutLog, studyHubKey, importedStudyHubIds, dopamineBankCustom, dopamineBankDismissed, dopamineBankCount, dopamineBankCountDate]);
 
   /* ---------- cycle sync: pull cycleStart/cycleLength/periodLength from the Lunar app ---------- */
   useEffect(() => {
@@ -2961,7 +3282,10 @@ export default function RootSystem() {
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }} className="today-grid">
               <div>
-                <FocusTimer tasks={tasksByStatus[STATUS.ACTIVE]} onSessionComplete={t => { if (t) updateTask(t.id, { status: STATUS.COMPLETED }); }} />
+                <FocusTimer tasks={tasksByStatus[STATUS.ACTIVE]} onSessionComplete={t => { if (t) updateTask(t.id, { status: STATUS.COMPLETED }); }} onLogTime={logTimeAuditEntry} />
+                <div style={{ marginTop: 10 }}>
+                  <ManualTimeLogWidget tasks={tasksByStatus[STATUS.ACTIVE]} onLogTime={logTimeAuditEntry} />
+                </div>
               </div>
               <div>
                 <MoonAndCycleWidget cyclePhase={cycleStart ? cyclePhaseForDate(new Date(), cycleStart, cycleLength, periodLength)?.phase : null} />
@@ -3993,6 +4317,9 @@ export default function RootSystem() {
                 sscr={sscrLog.find(e => e.weekStart === currentReviewWeekStart()) || {}}
                 setSscr={s => upsertLog(setSscrLog, currentReviewWeekStart(), s)}
               />
+            </div>
+            <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, gridColumn: "1 / -1" }}>
+              <TimeAuditReport timeAuditLog={timeAuditLog} tasks={tasks} updateTask={updateTask} weekStartKey={currentReviewWeekStart()} />
             </div>
             <div style={{ background: COLORS.white, borderRadius: 16, padding: 24, gridColumn: "1 / -1" }}>
               <ReviewReport wheelLog={wheelLog} sscrLog={sscrLog} closeoutLog={closeoutLog} tasks={tasks} reportRef={reportRef} />
