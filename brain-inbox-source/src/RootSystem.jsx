@@ -1526,15 +1526,29 @@ function DopamineBank({ customItems, setCustomItems, dismissedSeeds, setDismisse
     </div>
   );
 }
-function StudyHubTasksWidget({ studyHubKey, onConnect, loadState, pending, onImport, onSkip, onReload }) {
+function StudyHubTasksWidget({ studyHubKey, onConnect, loadState, pending, onImport, onImportMany, onSkip, onReload }) {
   const [keyInput, setKeyInput] = useState("");
+  const [collapsed, setCollapsed] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState({});
+
+  // Grouped by source (e.g. "Syllabus · Q1", "Checkpoint · Year One") —
+  // the same label the bridge already attaches to each item, so no new
+  // wiring back in Study Hub is needed for this. A long syllabus-wide list
+  // reads very differently once it's organized by quarter instead of one
+  // long flat scroll.
+  const groups = {};
+  pending.forEach(item => { (groups[item.source] = groups[item.source] || []).push(item); });
+  const groupNames = Object.keys(groups);
 
   return (
     <div style={{ background: "#fff", borderRadius: 14, padding: 16, border: `1px solid ${COLORS.lavenderLight}` }}>
-      <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, marginBottom: 12, fontFamily: BODY_FONT, textAlign: "center" }}>
-        Study Hub Tasks
-      </h3>
-      {!studyHubKey ? (
+      <button onClick={() => setCollapsed(c => !c)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%", background: "none", border: "none", cursor: "pointer", padding: 0, marginBottom: collapsed ? 0 : 12 }}>
+        <span style={{ fontSize: 12, transform: collapsed ? "rotate(-90deg)" : "none", transition: "transform 0.15s", color: COLORS.sage }}>▾</span>
+        <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.7, fontFamily: BODY_FONT, margin: 0 }}>
+          Study Hub Tasks{studyHubKey && pending.length > 0 ? ` · ${pending.length}` : ""}
+        </h3>
+      </button>
+      {!collapsed && (!studyHubKey ? (
         <div>
           <p style={{ fontSize: 12, color: COLORS.ink, opacity: 0.7, textAlign: "center", marginBottom: 8 }}>
             Pull open syllabus items and checkpoint steps in as tasks — read-only, nothing writes back.
@@ -1564,34 +1578,54 @@ function StudyHubTasksWidget({ studyHubKey, onConnect, loadState, pending, onImp
           {loadState === "loaded" && pending.length === 0 && (
             <div style={{ fontSize: 12, color: COLORS.ink, opacity: 0.6, textAlign: "center" }}>Nothing open right now — you're caught up.</div>
           )}
-          {pending.map(item => (
-            <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${COLORS.lavenderLight}` }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12.5 }}>{item.text}</div>
-                <div style={{ fontSize: 10.5, color: COLORS.sage }}>{item.source}{item.date ? ` · ${item.date}` : ''}</div>
+          {groupNames.map(groupName => {
+            const items = groups[groupName];
+            const groupCollapsed = !!collapsedGroups[groupName];
+            return (
+              <div key={groupName} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
+                  <button onClick={() => setCollapsedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }))} style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 11.5, fontWeight: 600, color: COLORS.ink }}>
+                    <span style={{ fontSize: 10, transform: groupCollapsed ? "rotate(-90deg)" : "none", transition: "transform 0.15s", color: COLORS.sage }}>▾</span>
+                    {groupName} <span style={{ color: COLORS.sage, fontWeight: 400 }}>({items.length})</span>
+                  </button>
+                  {items.length > 1 && (
+                    <button onClick={() => onImportMany(items)} style={{ fontSize: 10.5, padding: "3px 7px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", color: COLORS.sage, cursor: "pointer" }}>
+                      Add all
+                    </button>
+                  )}
+                </div>
+                {!groupCollapsed && items.map(item => (
+                  <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 0 6px 14px", borderBottom: `1px solid ${COLORS.lavenderLight}` }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12.5 }}>{item.text}</div>
+                      {item.date && <div style={{ fontSize: 10.5, color: COLORS.sage }}>{item.date}</div>}
+                    </div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button onClick={() => onImport(item)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "none", background: COLORS.sage, color: "#fff", cursor: "pointer" }}>Add</button>
+                      <button onClick={() => onSkip(item.id)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", cursor: "pointer" }}>Skip</button>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div style={{ display: "flex", gap: 4 }}>
-                <button onClick={() => onImport(item)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "none", background: COLORS.sage, color: "#fff", cursor: "pointer" }}>Add</button>
-                <button onClick={() => onSkip(item.id)} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", cursor: "pointer" }}>Skip</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {(loadState === "loaded" || loadState === "error") && (
             <button onClick={onReload} style={{ marginTop: 8, width: "100%", padding: 6, borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, background: "#fff", fontSize: 11, color: COLORS.sage, cursor: "pointer" }}>
               Check again
             </button>
           )}
         </div>
-      )}
+      ))}
     </div>
   );
 }
 
-function CurrentlyReadingWidget({ book, setBook, libraryKey, saveLibraryKey, libraryLoadState, loadLibrary, libraryBooks, linkedBook, linkBook, unlinkBook, onDragCommit, pageSaveState }) {
+function CurrentlyReadingWidget({ book, setBook, libraryKey, saveLibraryKey, libraryLoadState, loadLibrary, libraryBooks, linkedBook, linkBook, unlinkBook, onDragCommit, pageSaveState, onSaveNote }) {
   const setField = patch => setBook(prev => ({ ...prev, ...patch }));
   const progress = book.progress || 0;
   const fileInputRef = useRef(null);
   const [pageDraft, setPageDraft] = useState(linkedBook ? String(linkedBook.currentPage || 0) : "");
+  const [showHistory, setShowHistory] = useState(false);
   useEffect(() => { if (linkedBook) setPageDraft(String(linkedBook.currentPage || 0)); }, [linkedBook?.currentPage]);
 
   function handleCoverFile(e) {
@@ -1678,6 +1712,33 @@ function CurrentlyReadingWidget({ book, setBook, libraryKey, saveLibraryKey, lib
         style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, fontStyle: "italic", marginBottom: 8, boxSizing: "border-box", fontFamily: "inherit" }} />
       <textarea rows={2} value={book.note || ""} onChange={e => setField({ note: e.target.value })} placeholder="Reading thoughts and notes from today…"
         style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${COLORS.lavenderLight}`, fontSize: 12.5, boxSizing: "border-box", fontFamily: "inherit" }} />
+      <button
+        onClick={() => onSaveNote(book.quote, book.note)}
+        disabled={!book.quote?.trim() && !book.note?.trim()}
+        style={{ width: "100%", marginTop: 6, padding: "7px 0", borderRadius: 8, border: "none", background: (book.quote?.trim() || book.note?.trim()) ? COLORS.sage : COLORS.lavenderLight, color: "#fff", fontSize: 12, cursor: (book.quote?.trim() || book.note?.trim()) ? "pointer" : "default" }}
+      >
+        Save &amp; clear for tomorrow
+      </button>
+      {linkedBook && <div style={{ fontSize: 10, color: COLORS.sage, textAlign: "center", marginTop: 4 }}>Saved notes are also added to this book's record in your Library Tracker.</div>}
+
+      {(book.history || []).length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <button onClick={() => setShowHistory(s => !s)} style={{ fontSize: 11, color: COLORS.sage, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+            {showHistory ? "Hide" : "See"} past notes ({book.history.length}) {showHistory ? "▾" : "▸"}
+          </button>
+          {showHistory && (
+            <div style={{ marginTop: 6, maxHeight: 180, overflowY: "auto" }}>
+              {book.history.map((h, i) => (
+                <div key={i} style={{ padding: "6px 0", borderTop: `1px solid ${COLORS.lavenderLight}`, fontSize: 11.5 }}>
+                  <div style={{ color: COLORS.sage, fontSize: 10.5, marginBottom: 2 }}>{h.date}</div>
+                  {h.quote && <div style={{ fontStyle: "italic", marginBottom: 2 }}>"{h.quote}"</div>}
+                  {h.note && <div>{h.note}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2355,6 +2416,13 @@ export default function RootSystem() {
     setStudyHubPending(prev => prev.filter(p => p.id !== item.id));
   }
 
+  // "Add all" for a whole quarter/checkpoint group at once, reusing the
+  // exact same per-item logic above rather than a separate bulk code path
+  // that could quietly drift out of sync with it.
+  function importStudyHubTasksMany(items) {
+    items.forEach(importStudyHubTask);
+  }
+
   function skipStudyHubTask(id) {
     setImportedStudyHubIds(prev => [...prev, id]);
     setStudyHubPending(prev => prev.filter(p => p.id !== id));
@@ -2372,6 +2440,48 @@ export default function RootSystem() {
       const withoutToday = prev.filter(e => e.date !== dateKey);
       return [{ date: dateKey, answer: text }, ...withoutToday];
     });
+  }
+
+  // Notes used to just sit in the quote/note fields forever — nothing
+  // recorded them anywhere, and they only went away when she manually
+  // cleared them to write the next day's. This records each save as a
+  // dated entry (kept locally regardless of library link, so nothing is
+  // ever lost even without one) and clears the fields automatically. If a
+  // book is linked, it also best-effort pushes the note onto that book's
+  // own record in the Library Tracker — read-modify-write, same pattern
+  // already used for page-progress sync — so the note lives with the book
+  // itself, not just buried in Brain Inbox.
+  function saveReadingNote(quote, note) {
+    if (!quote?.trim() && !note?.trim()) return;
+    const entry = { date: toKey(new Date()), quote: quote?.trim() || "", note: note?.trim() || "" };
+    setReadingBook(prev => ({ ...prev, quote: "", note: "", history: [entry, ...(prev.history || [])] }));
+
+    if (libraryKey && linkedBookId) {
+      fetch(LIBRARY_URL + "?key=" + encodeURIComponent(libraryKey))
+        .then(r => r.ok ? r.json() : Promise.reject(new Error("Library load failed")))
+        .then(res => {
+          const data = res.data;
+          if (!data) throw new Error("No library data");
+          const book = (data.books || []).find(b => b.id === linkedBookId);
+          if (!book) throw new Error("Book not found in library");
+          // The Library Tracker has no "notes" field at all — it has
+          // `review` ("Brief Review") and `quote` ("Favorite Quote"), both
+          // single strings that are actually displayed on the book and
+          // included in CSV export. Appending a dated line to those real
+          // fields means this note actually shows up somewhere, instead of
+          // being written into a phantom field that would look saved here
+          // but silently vanish the moment the book gets exported to CSV
+          // and re-imported, since only recognized fields survive that.
+          const stamp = `[${entry.date}]`;
+          if (entry.note) book.review = book.review ? `${book.review}\n\n${stamp} ${entry.note}` : `${stamp} ${entry.note}`;
+          if (entry.quote) book.quote = book.quote ? `${book.quote}\n\n${stamp} "${entry.quote}"` : `${stamp} "${entry.quote}"`;
+          return fetch(LIBRARY_URL + "?key=" + encodeURIComponent(libraryKey), {
+            method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+          });
+        })
+        .then(() => loadLibrary(libraryKey))
+        .catch(err => console.error("Pushing reading note to library failed (kept locally regardless):", err));
+    }
   }
 
   function loadLibrary(key) {
@@ -3563,6 +3673,7 @@ export default function RootSystem() {
                 loadState={studyHubLoadState}
                 pending={studyHubPending}
                 onImport={importStudyHubTask}
+                onImportMany={importStudyHubTasksMany}
                 onSkip={skipStudyHubTask}
                 onReload={() => loadStudyHubTasks(studyHubKey)}
               />
@@ -3603,6 +3714,7 @@ export default function RootSystem() {
                   unlinkBook={unlinkBook}
                   onDragCommit={commitPageToLibrary}
                   pageSaveState={pageSaveState}
+                  onSaveNote={saveReadingNote}
                 />
               </div>
               <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: `1px solid ${COLORS.lavenderLight}` }}>
